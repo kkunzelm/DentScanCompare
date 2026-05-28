@@ -12,6 +12,7 @@
 #include <vtkLookupTable.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <Eigen/Core>
+#include <QPoint>
 #include <array>
 #include <memory>
 #include <vector>
@@ -41,8 +42,9 @@ public:
     void clearOverlayActors();
 
     // ── occlusal-plane picking ────────────────────────────────────────────
-    // Activate/deactivate point-pick mode.  While active, left-clicks pick
-    // a surface point and emit pointPicked() instead of rotating the camera.
+    // Activate/deactivate point-pick mode.  While active, a short left-click
+    // (< 6 px movement) picks a surface point and emits pointPicked().
+    // Left-click-drag still rotates the camera normally.
     void setPickMode(bool active);
     bool pickMode() const { return m_pickMode; }
 
@@ -87,6 +89,7 @@ private:
     QLabel*                  m_titleLabel  = nullptr;
     QVTKOpenGLNativeWidget*  m_vtkWidget   = nullptr;
     bool                     m_pickMode    = false;
+    QPoint                   m_pressPos;              // for click-vs-drag detection
 
     std::vector<vtkSmartPointer<vtkActor>> m_overlayActors;
     std::vector<vtkSmartPointer<vtkActor>> m_pickActors;   // spheres + planes

@@ -291,6 +291,48 @@ void MainWindow::setupTab3Registration()
     m_clearPickBtn->setToolTip("Remove all seed points and reset the segmentation.");
     ctrlLayout->addRow(m_clearPickBtn);
 
+    // ── Segmentation parameters (tunable live) ───────────────────────────
+    m_segGeodesicSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segGeodesicSpin->setRange(3.0, 25.0);
+    m_segGeodesicSpin->setSingleStep(0.5);
+    m_segGeodesicSpin->setValue(12.0);
+    m_segGeodesicSpin->setSuffix(" mm");
+    m_segGeodesicSpin->setToolTip(
+        "Maximum surface-path (geodesic) distance from the seed to any\n"
+        "included crown vertex.\n"
+        "Decrease if the segmentation overshoots onto adjacent teeth or\n"
+        "gingiva.  Increase if parts of the crown are missing.\n"
+        "Typical range: molars 10–13 mm, incisors 8–11 mm.");
+    ctrlLayout->addRow("Max geodesic:", m_segGeodesicSpin);
+
+    m_segCreaseSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segCreaseSpin->setRange(10.0, 80.0);
+    m_segCreaseSpin->setSingleStep(5.0);
+    m_segCreaseSpin->setValue(50.0);
+    m_segCreaseSpin->setSuffix(" °");
+    m_segCreaseSpin->setToolTip(
+        "Maximum allowed crease angle between adjacent faces.\n"
+        "The cementoenamel junction (CEJ) creates a sharp kink;\n"
+        "expansion stops when the angle between neighbour normals\n"
+        "exceeds this threshold.\n"
+        "Decrease (e.g. 35°) to stop earlier at the CEJ.\n"
+        "Increase (e.g. 65°) if the crown surface has local sharp ridges.");
+    ctrlLayout->addRow("CEJ crease:", m_segCreaseSpin);
+
+    m_segCurvSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segCurvSpin->setRange(-10.0, 0.0);
+    m_segCurvSpin->setSingleStep(0.5);
+    m_segCurvSpin->setValue(-4.0);
+    m_segCurvSpin->setSuffix(" /mm");
+    m_segCurvSpin->setToolTip(
+        "Minimum mean curvature κ_H a face must have to be included.\n"
+        "The gingival sulcus is concave (κ_H strongly negative);\n"
+        "expansion stops when the face curvature falls below this floor.\n"
+        "Increase toward 0 (e.g. −2) to stop earlier at concavities.\n"
+        "Decrease (e.g. −6) if shallow concavities on the crown are\n"
+        "being excluded.  Requires curvature computation to have run.");
+    ctrlLayout->addRow("Min curvature:", m_segCurvSpin);
+
     m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", ctrlPanel);
     m_recomputeBtn->setToolTip(
         "Re-run distance statistics using the current region of interest.\n"
@@ -348,6 +390,14 @@ void MainWindow::setupTab3Registration()
             this, [this](double){ updatePlaneVisualization(); });
     connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double){ updatePlaneVisualization(); });
+    // Re-run segmentation live when any parameter spinbox changes
+    auto reSegment = [this](double){ if (!m_pickedPts.empty()) runSegmentation(); };
+    connect(m_segGeodesicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, reSegment);
+    connect(m_segCreaseSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, reSegment);
+    connect(m_segCurvSpin,     QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, reSegment);
 
     m_registrationStatus = new QLabel("Not yet run.", ctrlPanel);
     m_registrationStatus->setWordWrap(true);
@@ -769,42 +819,49 @@ void MainWindow::onPointPicked(double x, double y, double z)
     m_pickedPts.push_back({x, y, z});
     const int n = static_cast<int>(m_pickedPts.size());
 
-    // Update sphere visualization immediately
     if (m_overlayWidget)
         m_overlayWidget->showPickSpheres(m_pickedPts);
 
-    // Fit plane as soon as we have 3+ points
     if (n >= 3) {
         fitOcclusalPlane();
         updatePlaneVisualization();
     }
 
-    // Run tooth segmentation on the scan with the most triangles so the
-    // user gets immediate visual feedback in the overlay viewport.
+    runSegmentation();
+    m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
+}
+
+void MainWindow::runSegmentation()
+{
+    const int n = static_cast<int>(m_pickedPts.size());
+    if (n == 0) return;
+
+    ToothSegmentation::Params params;
+    if (m_segGeodesicSpin) params.maxGeodesicMm     = m_segGeodesicSpin->value();
+    if (m_segCreaseSpin)   params.maxCreaseAngleDeg = m_segCreaseSpin->value();
+    if (m_segCurvSpin)     params.minMeanCurvature  = m_segCurvSpin->value();
+
     if (!m_scans.empty()) {
         auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
             [](const auto& a, const auto& b){
                 return a->triangleCount < b->triangleCount; });
 
-        m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts);
+        m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts, params);
 
         const std::size_t nTooth = std::count(m_toothMask.begin(), m_toothMask.end(), true);
 
-        // Segmentation status label
         if (m_segStatusLabel)
             m_segStatusLabel->setText(
                 QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
                         "<span style='color:#555;'>Overlay: ivory=crown, grey=gingiva</span>")
                     .arg(n).arg(n == 1 ? "" : "s").arg(nTooth));
 
-        // Plane status label (separate)
         if (m_pickCountLabel)
             m_pickCountLabel->setText(
                 n >= 3 ? QString("Plane fitted through %1 points.").arg(n)
                        : QString("Need %1 more point%2 to fit plane.")
                              .arg(3 - n).arg(3 - n == 1 ? "" : "s"));
 
-        // Show segmentation colours on the overlay viewport
         if (m_overlayWidget)
             m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
     } else {
@@ -815,8 +872,6 @@ void MainWindow::onPointPicked(double x, double y, double z)
         if (m_pickCountLabel)
             m_pickCountLabel->setText("Load scans first.");
     }
-
-    m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
 }
 
 void MainWindow::clearPickedPoints()
@@ -898,17 +953,17 @@ void MainWindow::recomputeMetrics()
     const double zWindow = (!haveMask && !plane.active && m_zWindowSpin)
                            ? m_zWindowSpin->value() : 0.0;
 
-    // When seed points exist, re-run segmentation per scan so the mask vertex
-    // indices match each individual scan (different scans have different vertex
-    // counts — sharing one mask by index across scans silently mis-filters).
-    // All scans are in the same aligned coordinate frame after runAnalysis(), so
-    // the same world-space seed points produce correct seeds on every scan.
+    ToothSegmentation::Params segParams;
+    if (m_segGeodesicSpin) segParams.maxGeodesicMm     = m_segGeodesicSpin->value();
+    if (m_segCreaseSpin)   segParams.maxCreaseAngleDeg = m_segCreaseSpin->value();
+    if (m_segCurvSpin)     segParams.minMeanCurvature  = m_segCurvSpin->value();
+
     setStatus("Recomputing metrics…");
     std::size_t totalToothVerts = 0;
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
         std::vector<bool> mask;
         if (haveMask)
-            mask = ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts);
+            mask = ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts, segParams);
         DistanceField::fillReport(*m_scans[i], m_reports[i],
                                   0.2, zWindow, plane, mask);
         ArchMetrics::computeBoundaryMetrics(*m_scans[i], m_reports[i]);

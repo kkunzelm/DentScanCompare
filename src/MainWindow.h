@@ -57,6 +57,7 @@ private:
     void fitOcclusalPlane();        // least-squares plane through m_pickedPts
     void updatePlaneVisualization();
     void recomputeMetrics();        // re-run distance+arch steps without re-running ICP
+    void runSegmentation();         // re-run tooth segmentation with current params+seeds
     void updateOverviewTab();
     void updateFingerprintTab();
     void updateRegistrationTab();
@@ -97,6 +98,9 @@ private:
     QLabel*         m_segStatusLabel     = nullptr;  // shows seed count + vertex count
     QPushButton*    m_clearPickBtn       = nullptr;
     QPushButton*    m_recomputeBtn       = nullptr;
+    QDoubleSpinBox* m_segGeodesicSpin    = nullptr;  // maxGeodesicMm
+    QDoubleSpinBox* m_segCreaseSpin      = nullptr;  // maxCreaseAngleDeg
+    QDoubleSpinBox* m_segCurvSpin        = nullptr;  // minMeanCurvature
     QDoubleSpinBox* m_planeAboveSpin     = nullptr;  // zone above fitted plane [mm]
     QDoubleSpinBox* m_planeBelowSpin     = nullptr;  // zone below fitted plane [mm]
     QLabel*         m_pickCountLabel     = nullptr;  // plane point count (fallback section)

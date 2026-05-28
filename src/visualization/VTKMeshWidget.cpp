@@ -259,22 +259,33 @@ void VTKMeshWidget::setPickMode(bool active)
 
 bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
 {
-    if (m_pickMode && obj == m_vtkWidget &&
-        event->type() == QEvent::MouseButtonPress) {
-        auto* me = static_cast<QMouseEvent*>(event);
-        if (me->button() == Qt::LeftButton) {
-            // VTK Y-axis is flipped relative to Qt
-            const int x = me->pos().x();
-            const int y = m_vtkWidget->height() - me->pos().y() - 1;
-
-            vtkNew<vtkCellPicker> picker;
-            picker->SetTolerance(0.0005);
-            if (picker->Pick(x, y, 0, m_renderer)) {
-                double pos[3];
-                picker->GetPickPosition(pos);
-                emit pointPicked(pos[0], pos[1], pos[2]);
+    if (m_pickMode && obj == m_vtkWidget) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_pressPos = me->pos();
+                // Pass through to VTK so drag-to-rotate still works.
+                return false;
             }
-            return true; // consume — don't forward to VTK (no camera rotation)
+        }
+        if (event->type() == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                // Only treat as a pick if the mouse barely moved (click, not drag).
+                if ((me->pos() - m_pressPos).manhattanLength() < 6) {
+                    const int x = me->pos().x();
+                    const int y = m_vtkWidget->height() - me->pos().y() - 1;
+                    vtkNew<vtkCellPicker> picker;
+                    picker->SetTolerance(0.0005);
+                    if (picker->Pick(x, y, 0, m_renderer)) {
+                        double pos[3];
+                        picker->GetPickPosition(pos);
+                        emit pointPicked(pos[0], pos[1], pos[2]);
+                    }
+                }
+                // Always pass through so VTK resets its rotation state.
+                return false;
+            }
         }
     }
     return QWidget::eventFilter(obj, event);
