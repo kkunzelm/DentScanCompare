@@ -1,11 +1,10 @@
 #include "ToothSegmentation.h"
 
-#include <CGAL/Polygon_mesh_processing/compute_normal.h>
-
-#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include <array>
 #include <cmath>
+#include <functional>
 #include <numbers>
 #include <queue>
 #include <vector>
@@ -14,12 +13,12 @@ namespace ToothSegmentation {
 
 namespace {
 
-// ── Per-face precomputed data ─────────────────────────────────────────────────
+// ── Per-face precomputed geometry ─────────────────────────────────────────────
 
 struct FaceData {
-    Eigen::Vector3d normal;     // outward unit normal
-    double          meanCurv;   // mean |κ_H| averaged over 3 vertices
-    double          centerZ;    // Z of face centroid
+    Eigen::Vector3d normal;   // outward unit normal
+    Eigen::Vector3d centroid; // face centroid in world space
+    double          meanCurv; // mean κ_H averaged over the 3 vertices
 };
 
 std::vector<FaceData> buildFaceData(const ScanData& scan)
@@ -40,46 +39,31 @@ std::vector<FaceData> buildFaceData(const ScanData& scan)
         const Point3& p1 = mesh.point(vs[1]);
         const Point3& p2 = mesh.point(vs[2]);
 
-        // Face normal via cross product
-        Vector3K fn = CGAL::cross_product(p1 - p0, p2 - p0);
-        double   len = std::sqrt(CGAL::to_double(fn.squared_length()));
-        Eigen::Vector3d n(0.0, 0.0, 1.0);
-        if (len > 1e-12)
-            n = Eigen::Vector3d(CGAL::to_double(fn.x()) / len,
-                                CGAL::to_double(fn.y()) / len,
-                                CGAL::to_double(fn.z()) / len);
+        auto toEigen = [](const Point3& p) {
+            return Eigen::Vector3d(CGAL::to_double(p.x()),
+                                   CGAL::to_double(p.y()),
+                                   CGAL::to_double(p.z()));
+        };
+        Eigen::Vector3d e0 = toEigen(p0);
+        Eigen::Vector3d e1 = toEigen(p1);
+        Eigen::Vector3d e2 = toEigen(p2);
 
-        // Face centroid Z
-        double cz = (CGAL::to_double(p0.z()) +
-                     CGAL::to_double(p1.z()) +
-                     CGAL::to_double(p2.z())) / 3.0;
+        Eigen::Vector3d fn = (e1 - e0).cross(e2 - e0);
+        double len = fn.norm();
+        Eigen::Vector3d n = (len > 1e-12) ? fn / len : Eigen::Vector3d(0,0,1);
 
-        // Face mean curvature (average of vertex curvatures)
         double kMean = 0.0;
         if (haveCurv) {
             const auto& cm = curvMapOpt.value();
             kMean = (get(cm, vs[0]) + get(cm, vs[1]) + get(cm, vs[2])) / 3.0;
         }
 
-        fd[f.idx()] = {n, kMean, cz};
+        fd[f.idx()] = { n, (e0 + e1 + e2) / 3.0, kMean };
     }
     return fd;
 }
 
-// ── Face adjacency: find all faces sharing an edge with f ────────────────────
-
-std::vector<FaceDesc> adjacentFaces(const SurfaceMesh& mesh, FaceDesc f)
-{
-    std::vector<FaceDesc> nbrs;
-    for (auto h : mesh.halfedges_around_face(mesh.halfedge(f))) {
-        auto opp = mesh.opposite(h);
-        if (!mesh.is_border(opp))
-            nbrs.push_back(mesh.face(opp));
-    }
-    return nbrs;
-}
-
-// ── Find vertex nearest to a 3-D world position ──────────────────────────────
+// ── Find mesh vertex nearest to a world-space point (O(n) – called once) ─────
 
 VertexDesc nearestVertex(const SurfaceMesh& mesh,
                          const std::array<double,3>& pt)
@@ -88,16 +72,16 @@ VertexDesc nearestVertex(const SurfaceMesh& mesh,
     double bestSq = std::numeric_limits<double>::infinity();
     for (auto v : mesh.vertices()) {
         const Point3& p = mesh.point(v);
-        double dx = p.x() - pt[0];
-        double dy = p.y() - pt[1];
-        double dz = p.z() - pt[2];
+        double dx = CGAL::to_double(p.x()) - pt[0];
+        double dy = CGAL::to_double(p.y()) - pt[1];
+        double dz = CGAL::to_double(p.z()) - pt[2];
         double sq = dx*dx + dy*dy + dz*dz;
         if (sq < bestSq) { bestSq = sq; best = v; }
     }
     return best;
 }
 
-// ── Find a face incident to vertex v ─────────────────────────────────────────
+// ── One incident face of vertex v ─────────────────────────────────────────────
 
 FaceDesc incidentFace(const SurfaceMesh& mesh, VertexDesc v)
 {
@@ -107,9 +91,29 @@ FaceDesc incidentFace(const SurfaceMesh& mesh, VertexDesc v)
     return SurfaceMesh::null_face();
 }
 
+// ── Adjacent faces (sharing an edge) ─────────────────────────────────────────
+
+std::vector<FaceDesc> adjacentFaces(const SurfaceMesh& mesh, FaceDesc f)
+{
+    std::vector<FaceDesc> nbrs;
+    nbrs.reserve(3);
+    for (auto h : mesh.halfedges_around_face(mesh.halfedge(f))) {
+        auto opp = mesh.opposite(h);
+        if (!mesh.is_border(opp))
+            nbrs.push_back(mesh.face(opp));
+    }
+    return nbrs;
+}
+
 } // anonymous namespace
 
-// ── Main segmentation entry point ────────────────────────────────────────────
+// ── Main segmentation (Dijkstra on face adjacency graph) ─────────────────────
+//
+// Edge cost = centroid-to-centroid distance (geodesic approximation).
+// Each face is accepted if:
+//   accumulated geodesic distance < params.maxGeodesicMm       (primary)
+//   crease angle to previous face  < params.maxCreaseAngleDeg  (secondary)
+//   face mean curvature            > params.minMeanCurvature   (secondary)
 
 std::vector<bool> segment(const ScanData& scan,
                           const std::vector<VertexDesc>& seedVertices,
@@ -122,39 +126,42 @@ std::vector<bool> segment(const ScanData& scan,
     if (nF == 0 || seedVertices.empty())
         return std::vector<bool>(nV, false);
 
-    // Pre-compute per-face data once
     const auto fd = buildFaceData(scan);
 
-    // Threshold cosines (pre-computed for performance)
-    const double cosMaxTilt   = std::cos(params.maxNormalTiltDeg  * std::numbers::pi / 180.0);
-    const double cosMaxCrease = std::cos(params.maxCreaseAngleDeg * std::numbers::pi / 180.0);
-    const Eigen::Vector3d Zup(0.0, 0.0, 1.0);
+    const double cosMaxCrease =
+        std::cos(params.maxCreaseAngleDeg * std::numbers::pi / 180.0);
 
-    // Per-face label: -1 = unvisited, ≥0 = seed index
-    std::vector<int> faceLabel(nF, -1);
+    // Best geodesic distance found so far for each face (-1 = not visited)
+    std::vector<double> bestDist(nF, -1.0);
 
-    // Multi-source BFS (one queue per seed, interleaved for fair expansion)
-    // Implemented as a single BFS with per-seed counters
-    struct Entry { FaceDesc face; int seed; };
-    std::queue<Entry> frontier;
+    // Priority queue: min-heap on accumulated distance
+    struct Entry {
+        double   dist;
+        FaceDesc face;
+        int      seed;
+        bool operator>(const Entry& o) const { return dist > o.dist; }
+    };
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
 
+    // Multi-source: push all seed faces at distance 0
     for (int si = 0; si < static_cast<int>(seedVertices.size()); ++si) {
-        FaceDesc seedFace = incidentFace(mesh, seedVertices[si]);
-        if (seedFace == SurfaceMesh::null_face()) continue;
-
-        // Accept the seed face unconditionally (it IS a tooth crown by definition)
-        if (faceLabel[seedFace.idx()] == -1) {
-            faceLabel[seedFace.idx()] = si;
-            frontier.push({seedFace, si});
+        FaceDesc sf = incidentFace(mesh, seedVertices[si]);
+        if (sf == SurfaceMesh::null_face()) continue;
+        if (bestDist[sf.idx()] < 0.0) {
+            bestDist[sf.idx()] = 0.0;
+            pq.push({0.0, sf, si});
         }
     }
 
-    // Per-seed expansion count (safety cap)
+    // Per-seed expansion count (avoids unlimited growth on degenerate meshes)
     std::vector<int> expanded(seedVertices.size(), 0);
 
-    while (!frontier.empty()) {
-        auto [f, seed] = frontier.front();
-        frontier.pop();
+    while (!pq.empty()) {
+        auto [d, f, seed] = pq.top();
+        pq.pop();
+
+        // Stale entry (a shorter path was already found)
+        if (d > bestDist[f.idx()] + 1e-9) continue;
 
         if (expanded[seed] >= params.maxFacesPerSeed) continue;
         ++expanded[seed];
@@ -162,32 +169,38 @@ std::vector<bool> segment(const ScanData& scan,
         const FaceData& cur = fd[f.idx()];
 
         for (FaceDesc nb : adjacentFaces(mesh, f)) {
-            if (faceLabel[nb.idx()] != -1) continue; // already labelled
+            // ── Primary: geodesic distance limit ────────────────────────────
+            // Cost = centroid-to-centroid distance (cheap, good approximation
+            // for dense meshes like those from intraoral scanners).
+            const FaceData& nfd = fd[nb.idx()];
+            double edgeCost = (cur.centroid - nfd.centroid).norm();
+            double newDist  = d + edgeCost;
 
-            const FaceData& nf = fd[nb.idx()];
+            if (newDist > params.maxGeodesicMm) continue;
+            if (bestDist[nb.idx()] >= 0.0 && newDist >= bestDist[nb.idx()])
+                continue;
 
-            // ── Stopping criterion 1: face normal too tilted from +Z ──────
-            if (nf.normal.dot(Zup) < cosMaxTilt) continue;
+            // ── Secondary: CEJ kink guard ────────────────────────────────────
+            // A sharp crease between adjacent face normals signals the
+            // cementoenamel junction.  This works regardless of tooth
+            // orientation and fires for all tooth types.
+            if (cur.normal.dot(nfd.normal) < cosMaxCrease) continue;
 
-            // ── Stopping criterion 2: sharp crease at the shared edge ──────
-            // (CEJ creates a kink where enamel meets root surface)
-            if (cur.normal.dot(nf.normal) < cosMaxCrease) continue;
+            // ── Secondary: gingival sulcus concavity guard ───────────────────
+            if (nfd.meanCurv < params.minMeanCurvature) continue;
 
-            // ── Stopping criterion 3: concave gingival sulcus ─────────────
-            if (nf.meanCurv < params.minMeanCurvature) continue;
-
-            faceLabel[nb.idx()] = seed;
-            frontier.push({nb, seed});
+            bestDist[nb.idx()] = newDist;
+            pq.push({newDist, nb, seed});
         }
     }
 
-    // Map face labels to per-vertex mask.
-    // A vertex is "tooth" when at least one incident face is labelled.
+    // Map face results to per-vertex mask.
+    // A vertex is "tooth" when at least one incident face was reached.
     std::vector<bool> toothVertex(nV, false);
     for (auto v : mesh.vertices()) {
         for (auto h : mesh.halfedges_around_target(mesh.halfedge(v))) {
             if (!mesh.is_border(h) &&
-                faceLabel[mesh.face(h).idx()] >= 0) {
+                bestDist[mesh.face(h).idx()] >= 0.0) {
                 toothVertex[v.idx()] = true;
                 break;
             }

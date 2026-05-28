@@ -5,47 +5,45 @@
 
 // ── Tooth Crown Segmentation ─────────────────────────────────────────────────
 //
-// Implements a mesh-based region growing ("snapping snake") that expands
-// outward from one seed point per tooth crown and stops at the gingival
-// margin.
+// Implements a Dijkstra-based region growing ("snapping snake") that expands
+// outward from one seed point per tooth crown and stops at the gingival margin.
 //
-// The gingival margin is detected via three complementary geometric cues that
-// are available from STL data without colour or texture information:
+// PRIMARY stopping criterion – geodesic distance (orientation-independent):
+//   The accumulated surface-path distance from the seed is limited to
+//   maxGeodesicMm.  A full clinical crown is never more than 10–15 mm of
+//   surface path from the cusp tip, regardless of tooth type:
+//     Molars      8–12 mm   (wide, occlusal surface flat)
+//     Premolars   7–10 mm
+//     Canines     9–12 mm   (tall, pointed)
+//     Incisors   10–13 mm   (thin blade; palatal surface included)
+//   This replaces the earlier normal-tilt-from-Z criterion which incorrectly
+//   excluded the palatal/lingual surface of anterior teeth (which faces
+//   110–120° from +Z, far above any sensible threshold).
 //
-//   1. Absolute normal tilt from the occlusal axis (+Z after PCA alignment):
-//      tooth surfaces face mostly upward; gingival surfaces face sideways or
-//      downward.  Faces whose normal deviates more than maxNormalTiltDeg from
-//      +Z are excluded.
+// SECONDARY stopping criteria – geometry guards that catch CEJ features:
+//   Adjacent-face crease angle: the cementoenamel junction (CEJ) always
+//     creates a kink regardless of tooth orientation.  Default 50°.
+//   Mean curvature floor: the gingival sulcus is concave (κ_H < 0).
+//     Default -4 mm⁻¹.  Both criteria require curvatureComputed == true.
 //
-//   2. Adjacent-face crease angle: the cementoenamel junction (CEJ) creates a
-//      sharp kink between the enamel and root/gingival surfaces.  Region
-//      growth is blocked when the angle between adjacent face normals exceeds
-//      maxCreaseAngleDeg.
-//
-//   3. Mean curvature sign: the gingival sulcus is concave (κ_H < 0).  Faces
-//      with mean curvature below minMeanCurvature are excluded.
-//      Requires scan.curvatureComputed == true.
-//
-// Usage:
-//   1. Compute curvature (CurvatureAnalysis::compute).
-//   2. Register all scans (GPAReference::compute).
-//   3. Let operator pick one point per tooth (already wired in MainWindow).
-//   4. Call segment() — returns a per-vertex bool mask (true = tooth crown).
-//   5. Pass mask to DistanceField::fillReport() to restrict metrics.
+// How to pick seeds:
+//   Place one seed on the occlusal/incisal surface of each tooth crown.
+//   A single click per tooth is sufficient; the geodesic limit handles
+//   the rest.  Posterior molars need a larger radius (12 mm) than
+//   anterior incisors (10 mm) — a single shared value of 12 mm covers all.
 
 namespace ToothSegmentation {
 
 struct Params {
-    double maxNormalTiltDeg  = 75.0;  // exclude face if normal deviates > this from +Z [°]
-    double maxCreaseAngleDeg = 50.0;  // block expansion across edges creased > this [°]
-    double minMeanCurvature  = -4.0;  // exclude concave (gingival sulcus) faces [1/mm]
-    int    maxFacesPerSeed   = 30000; // safety cap per seed (avoids run-away growth)
+    double maxGeodesicMm      = 12.0;  // primary: max surface-path distance from seed [mm]
+    double maxCreaseAngleDeg  = 50.0;  // secondary: CEJ kink guard [°]
+    double minMeanCurvature   = -4.0;  // secondary: gingival sulcus concavity guard [1/mm]
+    int    maxFacesPerSeed    = 40000; // hard cap on BFS nodes per seed
 };
 
 // Returns a per-vertex boolean mask.  true = vertex belongs to a tooth crown.
-// seedVertices: one VertexDesc per tooth (typically the cusp-tip vertex nearest
-//               to each operator-picked point).
-// Requires curvatureComputed == true on the scan.
+// seedVertices: one VertexDesc per tooth (cusp-tip vertex nearest to each
+//               operator-picked point).
 std::vector<bool> segment(
     const ScanData& scan,
     const std::vector<VertexDesc>& seedVertices,
