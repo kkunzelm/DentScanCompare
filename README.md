@@ -1,1 +1,435 @@
 # DentScanCompare
+
+A desktop application for the systematic quality comparison of dental intraoral scanner
+outputs.  Multiple STL scans of the same physical object are loaded, automatically
+co-registered via Generalized Procrustes Analysis (GPA), and evaluated across a
+comprehensive set of accuracy, tessellation, and completeness metrics.  All results are
+displayed in interactive 3-D colour maps and a sortable metrics table, and can be
+exported as PNG images and a CSV file.
+
+---
+
+## Table of Contents
+
+1. [Purpose](#purpose)
+2. [Dependencies](#dependencies)
+3. [Building](#building)
+4. [Workflow and Usage](#workflow-and-usage)
+   - [Step 1 – Load STL files](#step-1--load-stl-files)
+   - [Step 2 – Inspect the Tessellation Fingerprint](#step-2--inspect-the-tessellation-fingerprint)
+   - [Step 3 – Configure registration](#step-3--configure-registration)
+   - [Step 4 – Define the region of interest](#step-4--define-the-region-of-interest)
+   - [Step 5 – Run the analysis](#step-5--run-the-analysis)
+   - [Step 6 – Read the Distance Maps](#step-6--read-the-distance-maps)
+   - [Step 7 – Read the Metrics table](#step-7--read-the-metrics-table)
+   - [Step 8 – Export results](#step-8--export-results)
+5. [Metric Reference](#metric-reference)
+   - [Tessellation quality metrics](#tessellation-quality-metrics)
+   - [Accuracy metrics](#accuracy-metrics)
+   - [Completeness metrics](#completeness-metrics)
+6. [Tessellation Fingerprint – Interpretation Guide](#tessellation-fingerprint--interpretation-guide)
+7. [Distance Map – Interpretation Guide](#distance-map--interpretation-guide)
+8. [STL file naming convention](#stl-file-naming-convention)
+9. [Important considerations](#important-considerations)
+
+---
+
+## Purpose
+
+Dental intraoral scanners are evaluated under identical conditions: each scanner captures
+the same physical test model (e.g., DefektIIa) and produces a binary STL file.  Because
+no external reference geometry is available (no CT or CMM ground truth), the application
+constructs a neutral reference surface internally using Generalized Procrustes Analysis —
+the mean of all aligned scans.  This makes the comparison self-contained and scanner-
+independent.
+
+The software answers three clinical questions:
+
+- **How accurate is each scanner?** — per-vertex signed distances to the GPA mean reference,
+  summarised as RMS, MAD, Hausdorff percentiles, and systematic bias.
+- **How intelligently does each scanner allocate triangles?** — the Adaptive Tessellation
+  Index (ATI) measures whether the scanner concentrates fine triangles where the surface
+  curves most.
+- **How complete is each scan?** — coverage percentage, open boundary length, hole count,
+  and stitching artefact angles quantify gaps and registration failures.
+
+---
+
+## Dependencies
+
+All dependencies must be present **before** running CMake.  On Debian/Ubuntu:
+
+| Library | Version | Install command |
+|---------|---------|-----------------|
+| Qt      | **5.15** (not Qt6) | `apt install qtbase5-dev qtbase5-private-dev libqt5opengl5-dev` |
+| VTK     | 9.3     | `apt install libvtk9-dev libvtk9-qt5-dev` |
+| CGAL    | 6.0+    | `apt install libcgal-dev` |
+| Eigen3  | 3.4+    | `apt install libeigen3-dev` |
+| nanoflann | 1.7+  | `apt install libnanoflann-dev` |
+| CMake   | 3.20+   | `apt install cmake` |
+| GCC/Clang | C++20  | `apt install build-essential` |
+
+**Why Qt5 and not Qt6?**  The system VTK 9.3 package on Debian 13 is compiled against Qt5.
+Mixing Qt5 VTK with Qt6 application code causes an `INTERFACE_QT_MAJOR_VERSION` conflict
+at link time.  Install `libvtk9-qt5-dev` and use `find_package(Qt5 ...)` — do not switch to
+Qt6 unless you rebuild VTK from source against Qt6.
+
+**Qt6 Charts** is not used.  All scatter plots are rendered with a custom QPainter widget
+because `vtkChartXY` silently drops data points in the Qt5/VTK9.3 rendering context.
+
+---
+
+## Building
+
+```bash
+# Clone or unpack the source
+cd DentScanCompare
+
+# Configure (out-of-tree build recommended)
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+# Compile (use -j to parallelise)
+cmake --build build -j$(nproc)
+
+# Run
+./build/src/DentScanCompare
+```
+
+A `compile_commands.json` is written to the build directory automatically
+(`CMAKE_EXPORT_COMPILE_COMMANDS ON`) and a symlink at the project root allows
+clangd/LSP tools to find it.
+
+**CMake quirk — MPI dummy target.**  VTK's CMake targets file unconditionally references
+`MPI::MPI_C` even when MPI is not used at runtime.  The root `CMakeLists.txt` handles this:
+
+```cmake
+project(DentScanCompare VERSION 1.0 LANGUAGES CXX C)   # C required for MPI detection
+find_package(MPI QUIET)
+if(NOT TARGET MPI::MPI_C)
+    add_library(MPI::MPI_C INTERFACE IMPORTED GLOBAL)  # dummy when MPI absent
+endif()
+find_package(VTK 9.3 REQUIRED ...)
+```
+
+Do not remove the `C` language from the `project()` line or change the order of these
+three blocks — the configure step will fail.
+
+---
+
+## Workflow and Usage
+
+### Step 1 – Load STL files
+
+**File → Open STL files** (or the toolbar button).  Select one or more binary STL files
+in a single dialog.  There is no upper limit on the number of files, but the GPA and
+AABB distance computations scale with triangle count; five scans of ~500 k triangles each
+complete in roughly 60–90 seconds on a modern desktop.
+
+The scanner name is extracted from the filename using the convention described in
+[STL file naming convention](#stl-file-naming-convention).  Once loaded, all meshes
+appear in **Tab 1 – Overview** with Phong shading.  The scanner list on the left shows
+triangle counts.
+
+**What the loader does automatically:**
+- Reads the binary STL header and per-face stored normals.
+- Corrects inconsistent winding order per face: if the cross-product of the two edge
+  vectors is anti-aligned with the stored STL normal, the two non-pivot vertices are
+  swapped.  This is necessary because some scanners (Primescan) export faces wound in
+  the opposite direction from the others.
+- Runs `repair_polygon_soup` → `orient_polygon_soup` → `polygon_soup_to_polygon_mesh`
+  to produce a clean CGAL `Surface_mesh`.
+- Computes per-vertex mean and Gaussian curvature via CGAL
+  `interpolated_corrected_curvatures`.
+
+---
+
+### Step 2 – Inspect the Tessellation Fingerprint
+
+Navigate to **Tab 2 – Fingerprint** before running the analysis.  Tessellation metrics
+are computed from the raw loaded mesh and do not depend on registration; this tab is
+therefore available immediately after loading.
+
+The scatter plot shows one point per triangle for every loaded scan, colour-coded by
+scanner.  Detailed interpretation is in [Tessellation Fingerprint – Interpretation
+Guide](#tessellation-fingerprint--interpretation-guide).
+
+---
+
+### Step 3 – Configure registration
+
+Open **Tab 3 – Registration**.  The controls in the left panel are:
+
+| Control | Default | Meaning |
+|---------|---------|---------|
+| Method | GPA – mean reference | Registration target.  "GPA – mean reference" builds a neutral mean surface from all scans.  Alternatively, select a specific scanner as the fixed reference; all other scans are then registered to it and its distance metrics will be zero. |
+| Max ICP iterations | 100 | Maximum iterations for the fine ICP stage per GPA cycle. |
+| Sample points | 20000 | Number of points sub-sampled from each mesh for ICP correspondence search.  Reduce for speed; increase for accuracy on very coarse meshes. |
+
+**Recommendation:** Leave the method as "GPA – mean reference" for unbiased comparison.
+Using a specific scanner as the reference is useful only when you want to measure all other
+scanners relative to one trusted ground-truth scan.
+
+---
+
+### Step 4 – Define the region of interest
+
+Restricting distance metrics to the tooth-crown surfaces eliminates contributions from
+gingival tissue, scan margins, and boundary artefacts.  Three approaches are available
+(only one is active at a time; priority decreases down this list):
+
+#### Option A – Tooth-crown segmentation (highest precision, recommended)
+
+1. In **Tab 3 – Registration**, click **Pick points**.  The cursor changes to a crosshair.
+2. Click once on the **occlusal or incisal surface** of each tooth crown you want to
+   include.  A yellow sphere marks each clicked point.  You need one click per tooth crown
+   (not per cusp — one click anywhere on the crown is sufficient).
+3. Click **Stop picking** when done.  The software immediately runs a Dijkstra-based
+   region-growing algorithm from each seed point and colours the mesh:
+   - **Ivory** = tooth crown (included in metrics)
+   - **Dark grey** = gingiva / margins (excluded)
+4. If the segmentation is wrong, click **Clear** and repeat.
+
+The segmentation expands from each seed using surface-path (geodesic) distance as the
+primary stopping criterion (≤ 12 mm from the seed, which covers every tooth type from
+molar to incisor).  Two secondary guards stop expansion at the gingival margin: a crease-
+angle check (≥ 50° kink between adjacent face normals signals the CEJ) and a curvature
+floor (mean κ_H > −4 mm⁻¹ rejects the concave gingival sulcus).
+
+**Note:** The segmentation is computed on the first loaded scan and applied to all scans
+via vertex-index correspondence.  Place seeds on the scan with the most complete coverage.
+
+#### Option B – Fitted occlusal plane (medium precision)
+
+Without placing tooth seeds, the picked points define an occlusal plane.  Once ≥ 3 points
+are picked, the software fits a least-squares plane through them (smallest eigenvector of
+the covariance matrix).  The "Above plane [mm]" and "Below plane [mm]" spinboxes define
+an asymmetric slab around this plane that is kept for metrics.
+
+Default offsets: +2 mm above (minimal gingival inclusion), −12 mm below (includes full
+crown depth).  Adjust if the arch is unusually deep or the plane is picked on gingiva.
+
+The fitted plane and its slab are shown as three coloured disks in the Registration
+viewport (grey = plane, green = above zone, cyan = below zone).
+
+#### Option C – Z-window (coarse, legacy)
+
+The **Occlusal zone [mm]** spinbox (0 = disabled) restricts metrics to vertices within
+that many millimetres below the scan's Z maximum (the occlusal tips after PCA alignment).
+Set to 12 mm as a quick filter without picking any points.  Less accurate than Options
+A and B because PCA alignment is not always perfectly Z-perpendicular.
+
+---
+
+### Step 5 – Run the analysis
+
+Click **Run Analysis** (toolbar or menu).  A progress bar tracks the four pipeline stages:
+
+1. **Coarse alignment** – PCA centering and principal-axis rotation for all scans.
+2. **Orientation disambiguation** – 4-rotation Z-test (0°/90°/180°/270°) to resolve
+   the PCA 180° ambiguity.  Required for scanners that export in an arbitrary coordinate
+   frame.
+3. **GPA iterations** – alternating ICP → mean-mesh update cycles until the maximum
+   scan displacement between cycles is < 0.01 mm.
+4. **Distance field and metrics** – CGAL AABB tree on the GPA mean surface, per-vertex
+   signed distances, metric aggregation.
+
+Typical runtime: 60–120 seconds for five scans of 500 k triangles each.  The mean-mesh
+update (Stage 4 of GPA) is the slowest step (~30 s) because it performs an AABB query
+for every reference vertex against every scan.
+
+After completion, Tabs 3, 4, and 5 are populated automatically.
+
+---
+
+### Step 6 – Read the Distance Maps
+
+**Tab 4 – Distance Maps** shows one colour-coded 3-D mesh per scanner.  See
+[Distance Map – Interpretation Guide](#distance-map--interpretation-guide) for colour
+encoding.  Drag to rotate, scroll to zoom.  All viewports share the same colour scale for
+direct visual comparison.
+
+---
+
+### Step 7 – Read the Metrics table
+
+**Tab 5 – Metrics** lists all scanners in rows.  Column headers match the abbreviations
+in the [Metric Reference](#metric-reference) section below.  Cells are highlighted green
+(best value in column) and red (worst value) to make outliers immediately visible.  Click
+any column header to sort.
+
+---
+
+### Step 8 – Export results
+
+**Tab 6 – Export** writes all results to a chosen directory:
+
+- `fingerprint.png` — tessellation scatter plot at 300 dpi
+- `distance_<scanner>.png` — distance map per scanner at 300 dpi
+- `metrics.csv` — full metrics table with UTF-8 BOM (opens correctly in Excel on Windows)
+
+---
+
+## Metric Reference
+
+### Tessellation quality metrics
+
+Tessellation metrics are computed before registration from the raw loaded mesh.  They
+reflect intrinsic scanner properties, not accuracy.
+
+| Column | Full name | Unit | Interpretation |
+|--------|-----------|------|----------------|
+| **Triangles** | Triangle count | – | Total faces after import and repair.  Reflects the spatial resolution chosen by the scanner firmware.  More triangles → finer detail, larger file, longer processing time. |
+| **Edge** | Mean edge length | mm | Average of all three edge lengths per triangle, averaged over all triangles.  Smaller = finer mesh.  Typical range for modern intraoral scanners: 0.10–0.25 mm. |
+| **AspRatio** | Mean aspect ratio | – | (Longest edge) / (shortest edge) per triangle, averaged.  An equilateral triangle gives 1.0.  Values above ~2.5 indicate elongated "needle" triangles which degrade curvature estimation and FEA accuracy. |
+| **ATI** | Adaptive Tessellation Index | –1 to +1 | Spearman rank correlation between |mean curvature| (|κ_H|) and the reciprocal of triangle area (1/A), per triangle.  ATI ≈ +1: ideal adaptive mesh (small triangles at cusps and margins, large on flat areas).  ATI ≈ 0: uniform tessellation.  ATI < 0: inverted (coarser where curvature is highest). |
+| **DensHighκ** | Triangle density in high-curvature zone | /mm² | Triangles per mm² for vertices where |κ_H| exceeds the per-scan median.  Higher = more detail in the clinically critical cusp/fissure region. |
+| **DensLowκ** | Triangle density in low-curvature zone | /mm² | Triangles per mm² for vertices where |κ_H| ≤ median (palate, buccal gingiva).  Lower relative to DensHighκ = better adaptive behaviour. |
+
+### Accuracy metrics
+
+Accuracy metrics require a completed GPA registration.
+
+| Column | Full name | Unit | Interpretation |
+|--------|-----------|------|----------------|
+| **RMS** | Root Mean Square distance | mm | √(Σ dᵢ² / n).  Primary accuracy metric.  Sensitive to outliers — a few large errors inflate this strongly.  Lower is better. |
+| **MAD** | Median Absolute Deviation | mm | Median of |dᵢ|.  Robust to scan-boundary artefacts.  Reflects the "typical" error of the central 50% of the surface.  Read alongside RMS: large RMS + small MAD → few extreme outlier regions rather than a global systematic error. |
+| **H95** | 95th-percentile Hausdorff | mm | The 95th percentile of |dᵢ|.  Clinically meaningful: 95% of the scan surface is within H95 mm of the reference.  Boundary artefacts are in the top 5% and therefore excluded. |
+| **H100** | Maximum Hausdorff | mm | The single largest |dᵢ|.  Dominated by scan margins, incomplete patches, and topological holes.  Interpret alongside Coverage% and Holes.  High H100 with low RMS/MAD = accurate surface, fraying edges. |
+| **Bias** | Signed mean distance | mm | Mean of dᵢ (signed).  Positive = scan surface lies systematically outside the reference (expansive distortion, oversized arch).  Negative = systematically undersized (gingival compression, inward collapse).  Near zero = no directional systematic error. |
+
+### Completeness metrics
+
+| Column | Full name | Unit | Interpretation |
+|--------|-----------|------|----------------|
+| **Coverage%** | Surface coverage | % | Percentage of GPA reference vertices whose nearest scan vertex is within 0.2 mm.  100% = full capture of the reference anatomy. |
+| **Boundary** | Open boundary length | mm | Total length of edges belonging to only one face.  Every arch scan has at least one open boundary (the gingival margin), so a non-zero value is expected and normal.  Very high values indicate fragmented scan margins. |
+| **Holes** | Topological hole count | – | Number of closed holes counted via Euler characteristic (V − E + F).  An ideal arch scan has 0 interior holes (the gingival margin is an open boundary, not a hole).  Each additional hole represents a missing patch where the scanner lost tracking. |
+| **Stitch** | Maximum stitching-artefact angle | ° | Maximum normal-discontinuity angle between adjacent faces across the entire mesh.  Values above 90° indicate visible stitching artefacts at strip-merge junctions.  Values near 180° at the mesh boundary are expected (normal flip at open edges). |
+
+---
+
+## Tessellation Fingerprint – Interpretation Guide
+
+The scatter plot in **Tab 2** shows one dot per triangle for every loaded scan.
+
+**Axes (both log scale):**
+
+- **X-axis (horizontal):** |Mean curvature| (1/mm).  Left = flat regions (palate, buccal
+  gingiva, flat tooth surfaces).  Right = highly curved regions (cusp tips, fissures,
+  marginal ridges).  A sphere of radius r has |κ_H| = 1/r; a typical molar cusp has
+  radii of ~0.3–1.0 mm, giving |κ_H| of 1–3 mm⁻¹.
+- **Y-axis (vertical):** Triangle area (mm²).  Top = large, coarse triangles.
+  Bottom = small, fine triangles.
+
+**What to look for:**
+
+**Direction of the cloud.**  An adaptive scanner concentrates fine triangles where
+curvature is high: the cloud slopes from top-left (flat, coarse) to bottom-right (curved,
+fine).  This negative diagonal is expected for a well-adapted mesh.  ATI quantifies the
+strength of this slope as a single number.
+
+**Width and scatter.**  A tight, narrow cloud means consistent tessellation behaviour
+across the scan.  A diffuse cloud or bimodal distribution suggests the scanner uses very
+different strategies in different anatomical zones (e.g., coarser on the palate, fine on
+tooth crowns).
+
+**Position relative to other scanners.**  A cloud shifted toward bottom-left has many fine
+triangles even on flat surfaces (high total triangle count, possibly wasteful but safe).
+A cloud shifted toward top-right has coarse triangles even on curved surfaces — clinically
+concerning because marginal ridges and cusps are poorly resolved.
+
+**Comparing scanners.**  Each scanner has its own colour.  Overlapping clouds indicate
+similar tessellation strategies.  A scanner whose cloud extends further toward the
+bottom-right corner captures finer curvature detail.
+
+**Typical findings (five-scanner DefektIIa dataset):**  All five scanners show the
+expected negative diagonal trend, confirming at least some degree of adaptive
+tessellation.  Primescan shows the densest cluster at high curvature (bottom-right)
+consistent with its highest triangle count.  Trios5 achieves the best ATI (≈ 0.250),
+meaning its triangle-to-curvature correlation is strongest.  FussenS6000 has the lowest
+ATI (≈ 0.088), indicating the most uniform tessellation strategy.
+
+---
+
+## Distance Map – Interpretation Guide
+
+**Colour encoding (diverging blue–white–red, shared scale across all scanners):**
+
+- **Red** = positive distance = scan surface lies **outside** the reference (oversized,
+  buccally expanded arch)
+- **White** = zero deviation (on the reference surface)
+- **Blue** = negative distance = scan surface lies **inside** the reference (undersized,
+  inward collapse)
+
+The colour scale is set automatically to ±H95 of the worst scanner in the set (clamped
+to ±2 mm).  All five maps share the same scale for direct visual comparison.
+
+**Clinical interpretation:**
+
+- Widespread red on buccal aspects → scanner produces an expanded arch
+- Widespread blue on the occlusal surface → scanner records teeth as shorter/less
+  protruding than the reference
+- Mixed red/blue with sharp boundaries → stitching artefact, local registration failure,
+  or a true scanner-specific deformation pattern
+- Large grey region in the centre → the DefektIIa standardised defect (artificial missing-
+  tooth area); colours there may be artefactual if coverage is incomplete
+
+**Note on signed distances.**  Positive = scan is outside the reference (farther from the
+palate / tongue).  Negative = scan is inside (closer to the palate / tongue).  This
+convention holds after GPA alignment with the occlusal surface pointing toward +Z.
+
+---
+
+## STL file naming convention
+
+The scanner name is extracted from the STL **filename** using underscore `_` as a
+delimiter: the second token is taken as the scanner name.
+
+```
+DefektIIa_Primescan_30_3min23s_r3.stl   →  "Primescan"
+DefektIIa_Trios5_30_4min01s_r1.stl      →  "Trios5"
+DefektIIa_Mediti700_30_2min45s_r2.stl   →  "Mediti700"
+```
+
+If the filename has fewer than two underscore-delimited tokens, the full stem is used as
+the scanner name.  To ensure correct scanner identification, follow the
+`<model>_<Scanner>_<...>.stl` naming pattern when adding new scans.
+
+---
+
+## Important considerations
+
+**Tooth-crown seed points are not saved between sessions.**  If you close the application
+and reopen it, you must re-click the seed points on the mesh.  The segmentation result
+(the ivory/grey overlay) is stored in memory only.
+
+**One seed per tooth crown is sufficient.**  The Dijkstra region-growing algorithm expands
+outward from each seed using geodesic distance (≤ 12 mm surface path from the seed) as
+its primary criterion.  This radius covers every tooth type: molars (8–12 mm), premolars
+(7–10 mm), canines (9–12 mm), and incisors (10–13 mm).  Placing multiple seeds on the
+same tooth is harmless but unnecessary.
+
+**Do not place seeds on gingiva.**  The algorithm expands outward from the seed; a seed on
+gingival tissue will try to grow into gingiva first.  Place seeds on the occlusal/incisal
+surface (cusps, marginal ridges, incisal edges).
+
+**GPA is self-referential.**  The mean reference surface is the centroid of all loaded
+scans.  Adding or removing a scan changes the reference, which changes the distance
+metrics for all other scans.  Always compare the same set of scans in a single session.
+
+**The GPA mean reference is not a ground truth.**  If one scanner has a gross systematic
+error (e.g., a whole arch expanded by 0.3 mm), the mean reference is shifted by 0.3/N in
+that direction.  This slightly underestimates errors of the outlier scanner and slightly
+overestimates errors of the others.  For a five-scanner comparison this effect is small
+(~0.06 mm) but should be noted in publications.
+
+**Primescan winding quirk.**  Primescan exports triangle faces wound in the opposite
+direction from the other scanners tested.  The STL loader corrects this automatically
+using the stored per-face normal; no user action is required.  If a new scanner produces
+systematically inverted normals in the distance map, the loader's winding check is the
+first place to inspect.
+
+**Analysis runtime.**  On a desktop with a modern CPU (8+ cores), the full analysis of
+five scans at ~500 k triangles each takes 60–120 seconds.  The bottleneck is the GPA
+mean-mesh update (~30 s), which performs an AABB closest-point query for every reference
+vertex against every scan and is currently single-threaded.
