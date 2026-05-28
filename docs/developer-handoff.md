@@ -98,6 +98,12 @@ export/
 
 5. **DistanceField** – CGAL AABB tree on the GPA mean reference.  Per vertex of each scan:
    closest point + primitive, signed by dot(diff, face_normal).
+   `fillReport(scan, report, coverageThreshold=0.2, zWindowMm=0.0)`:
+   when `zWindowMm > 0`, only vertices within that many mm below the scan's maximum
+   Z (cusp tips after PCA) contribute to the statistics.  This restricts metrics to
+   the occlusal crown zone and excludes gingival tissue and scan-margin outliers.
+   Recommended: 12 mm.  Default 0 = use all vertices (legacy behaviour).
+   Exposed in the UI as the "Occlusal zone" spinbox in the Registration tab.
 
 6. **ArchMetrics** – Open boundary edge sum, Euler-characteristic hole count,
    stitching artifact angle via adjacent half-edge normals.
@@ -185,3 +191,41 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
   Could be parallelised with `QtConcurrent::map`.
 - CSV export uses UTF-8 BOM for Windows compatibility; column headers contain Unicode
   (κ, °, ²) – these render correctly on Windows with BOM.
+- The occlusal-zone restriction uses a simple global Z-maximum for the window anchor.
+  A more robust approach would use per-tooth cusp detection (local maxima of Z with
+  high |κ_H|) to anchor the window per tooth, handling cases where the arch is not
+  perfectly PCA-aligned in Z.
+
+---
+
+## Changelog (reverse chronological)
+
+### 2026-05-28 – Occlusal-zone restriction + documentation
+- `DistanceField::fillReport`: added `zWindowMm` parameter; when > 0, only vertices
+  within that window below Z_max are included in distance statistics.
+- `MainWindow` Registration tab: "Occlusal zone" QDoubleSpinBox (0 = all, recommended
+  12 mm); spinbox value passed to `fillReport` at analysis time.
+- `docs/interpretation.txt`: full guide to CSV columns and scatter-plot interpretation.
+- `docs/manuscript.md`: draft M&M / Results / Discussion for dental journal.
+
+### 2026-05-28 – STL winding fix + GPA mean reference (Option B)
+- `STLReader`: per-face winding verified against stored STL normal; inverted triangles
+  corrected before polygon soup construction.  Fixes Primescan reversed-normal issue.
+- `GPAReference`: after ICP convergence, `updateToMeanMesh()` moves reference vertices
+  to centroid of nearest points on all 5 aligned scans → neutral mean surface, all
+  scanners show non-zero distances.
+- `docs/developer-handoff.md`: initial version created.
+
+### 2026-05-27 – Registration, scatter, overlay, CSV fixes
+- ICP misalignment (FussenS6000/iTeroLumina 28 mm off): PCA coarse alignment + 4-
+  orientation Z-rotation test; reduced to 0.107–0.127 mm RMS.
+- `ScatterPlotWidget`: replaced vtkChartXY (silent data drop in Qt5/VTK9.3) with
+  custom QPainter log-log scatter.
+- `VTKMeshWidget::setOverlayMeshes`: Registration tab overlay was black; implemented
+  and called from `updateRegistrationTab()`.
+- CSV UTF-8 BOM added for Windows code-page compatibility.
+- Export tab CSV button wired; `MetricsTableWidget::exportToFile()` added.
+
+### 2026-05-26 – Initial working build
+- Full pipeline: STL load → curvature → tessellation → GPA → distance field → metrics.
+- Qt5/VTK9.3 build environment resolved (Qt6 conflict, MPI target, CGAL 6.0 API).
