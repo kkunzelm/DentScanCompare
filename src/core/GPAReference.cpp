@@ -183,10 +183,17 @@ std::shared_ptr<ScanData> compute(
     for (auto& scan : scans)
         pcaCoarseAlign(*scan);
 
-    // Initial reference: deepcopy of the scan with the most triangles.
-    auto refIt = std::max_element(scans.begin(), scans.end(),
-        [](const auto& a, const auto& b){
-            return a->triangleCount < b->triangleCount; });
+    // Initial reference: either the named scanner or the one with the most triangles.
+    auto refIt = scans.end();
+    if (!params.fixedRefScannerName.empty()) {
+        refIt = std::find_if(scans.begin(), scans.end(),
+            [&](const auto& s){ return s->scannerName == params.fixedRefScannerName; });
+    }
+    if (refIt == scans.end()) {
+        refIt = std::max_element(scans.begin(), scans.end(),
+            [](const auto& a, const auto& b){
+                return a->triangleCount < b->triangleCount; });
+    }
     auto gpaRef = std::make_shared<ScanData>();
     gpaRef->mesh          = (*refIt)->mesh;
     gpaRef->scannerName   = "GPA_Reference";
@@ -232,9 +239,10 @@ std::shared_ptr<ScanData> compute(
         if (maxDisp < params.convergenceThresh) break;
     }
 
-    // Update reference to the true mean of all aligned scans so that every
-    // scanner — including the original reference — shows a non-zero distance.
-    updateToMeanMesh(*gpaRef, scans);
+    // Update to true mean only for GPA mode; in fixed-reference mode the
+    // chosen scanner stays as the reference (distances to it are reported).
+    if (params.fixedRefScannerName.empty())
+        updateToMeanMesh(*gpaRef, scans);
 
     return gpaRef;
 }

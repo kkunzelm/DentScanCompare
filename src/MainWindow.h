@@ -7,7 +7,9 @@
 #include <QListWidget>
 #include <QProgressBar>
 #include <QLabel>
+#include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QFutureWatcher>
 #include <memory>
 #include <vector>
@@ -43,6 +45,7 @@ private:
 
     // ---- update helpers ----
     void updateScannerList();
+    void updateMethodCombo();   // repopulate method combo from loaded scans
     void updateOverviewTab();
     void updateFingerprintTab();
     void updateRegistrationTab();
@@ -73,6 +76,9 @@ private:
     QWidget*        m_tab3               = nullptr;
     VTKMeshWidget*  m_overlayWidget      = nullptr;
     QLabel*         m_registrationStatus = nullptr;
+    QComboBox*      m_methodCombo        = nullptr;  // GPA or fixed-ref scanner
+    QSpinBox*       m_maxIterSpin        = nullptr;  // ICP max iterations
+    QSpinBox*       m_sampleSpin         = nullptr;  // ICP sample points
     QDoubleSpinBox* m_zWindowSpin        = nullptr;  // occlusal zone [mm], 0=all
 
     // ---- Tab 4: Distance Maps ----

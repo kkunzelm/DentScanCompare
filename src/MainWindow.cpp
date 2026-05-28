@@ -194,20 +194,29 @@ void MainWindow::setupTab3Registration()
     ctrlPanel->setFixedWidth(220);
     auto* ctrlLayout = new QFormLayout(ctrlPanel);
 
-    auto* methodCombo = new QComboBox(ctrlPanel);
-    methodCombo->addItem("GPA (Hybrid, Recommended)");
-    methodCombo->addItem("Reference: Primescan");
-    methodCombo->addItem("Reference: Trios5");
-    ctrlLayout->addRow("Method:", methodCombo);
+    m_methodCombo = new QComboBox(ctrlPanel);
+    m_methodCombo->addItem("GPA – mean reference (recommended)");
+    m_methodCombo->setToolTip(
+        "GPA: aligns all scans iteratively and reports distances to the\n"
+        "mean surface.  No scanner is privileged as the reference.\n\n"
+        "Fixed ref: one scanner is held fixed; all others are aligned to it.\n"
+        "Load scans first — the combo is updated with the available names.");
+    ctrlLayout->addRow("Method:", m_methodCombo);
 
-    auto* maxIterSpin = new QSpinBox(ctrlPanel);
-    maxIterSpin->setRange(1, 200); maxIterSpin->setValue(100);
-    ctrlLayout->addRow("ICP iterations:", maxIterSpin);
+    m_maxIterSpin = new QSpinBox(ctrlPanel);
+    m_maxIterSpin->setRange(1, 500);
+    m_maxIterSpin->setValue(100);
+    m_maxIterSpin->setToolTip("Maximum ICP iterations per scan per GPA cycle.");
+    ctrlLayout->addRow("ICP iterations:", m_maxIterSpin);
 
-    auto* sampleSpin = new QSpinBox(ctrlPanel);
-    sampleSpin->setRange(1000, 100000); sampleSpin->setSingleStep(1000);
-    sampleSpin->setValue(20000);
-    ctrlLayout->addRow("ICP sample pts:", sampleSpin);
+    m_sampleSpin = new QSpinBox(ctrlPanel);
+    m_sampleSpin->setRange(1000, 100000);
+    m_sampleSpin->setSingleStep(1000);
+    m_sampleSpin->setValue(15000);
+    m_sampleSpin->setToolTip(
+        "Number of surface points sampled per ICP iteration.\n"
+        "More points → more accurate but slower per iteration.");
+    ctrlLayout->addRow("ICP sample pts:", m_sampleSpin);
 
     // Occlusal zone restriction
     m_zWindowSpin = new QDoubleSpinBox(ctrlPanel);
@@ -373,6 +382,7 @@ void MainWindow::onLoadFinished()
     setStatus(QString("%1 scan(s) loaded. Click 'Run Analysis' to proceed.")
               .arg(m_scans.size()));
     updateScannerList();
+    updateMethodCombo();
     updateOverviewTab();
 }
 
@@ -403,11 +413,28 @@ void MainWindow::runAnalysis()
             TessellationMetrics::fillReport(*m_scans[i], m_reports[i]);
         }
 
-        // Step 3: registration (GPA)
-        QMetaObject::invokeMethod(this, [this](){
-            setStatus("Running ICP / GPA registration…"); m_progress->setValue(40); }, Qt::QueuedConnection);
+        // Step 3: registration – read settings from UI widgets
+        // (widgets live on the GUI thread; capture values before the lambda)
+        const int    methodIdx  = m_methodCombo  ? m_methodCombo->currentIndex()  : 0;
+        const int    maxIter    = m_maxIterSpin   ? m_maxIterSpin->value()          : 100;
+        const int    samplePts  = m_sampleSpin    ? m_sampleSpin->value()           : 15000;
+
+        // Index 0 = GPA; index N>0 = fixed reference (combo item N-1 in m_scans)
+        std::string fixedRef;
+        if (methodIdx > 0 && methodIdx - 1 < static_cast<int>(m_scans.size()))
+            fixedRef = m_scans[static_cast<std::size_t>(methodIdx - 1)]->scannerName;
+
+        const QString modeStr = (fixedRef.empty())
+            ? "Running GPA registration…"
+            : QString("Registering to %1…").arg(QString::fromStdString(fixedRef));
+        QMetaObject::invokeMethod(this, [this, modeStr](){
+            setStatus(modeStr); m_progress->setValue(40); }, Qt::QueuedConnection);
+
         GPAReference::Params gpaParams;
-        gpaParams.icpParams.sampleCount = 15000;
+        gpaParams.icpParams.maxIterations    = maxIter;
+        gpaParams.icpParams.sampleCount      = samplePts;
+        gpaParams.fixedRefScannerName        = fixedRef;
+
         m_gpaReference = GPAReference::compute(m_scans, gpaParams,
             [this](int cycle, int scanIdx, double rms) {
                 Q_UNUSED(cycle); Q_UNUSED(scanIdx); Q_UNUSED(rms);
@@ -497,6 +524,21 @@ void MainWindow::updateScannerList()
             + "[" + QString::fromStdString(scan->stlHeader) + "]");
         m_scanList->addItem(item);
     }
+}
+
+void MainWindow::updateMethodCombo()
+{
+    if (!m_methodCombo) return;
+    const int prev = m_methodCombo->currentIndex();
+    m_methodCombo->clear();
+    m_methodCombo->addItem("GPA – mean reference (recommended)");
+    for (const auto& scan : m_scans)
+        m_methodCombo->addItem(
+            QString("Fixed ref: %1").arg(
+                QString::fromStdString(scan->scannerName)));
+    // restore previous selection if still valid
+    if (prev > 0 && prev < m_methodCombo->count())
+        m_methodCombo->setCurrentIndex(prev);
 }
 
 void MainWindow::updateOverviewTab()

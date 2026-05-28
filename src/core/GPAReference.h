@@ -12,6 +12,11 @@ struct Params {
     int    maxGPAIterations   = 20;
     double convergenceThresh  = 0.01;  // [mm] max mean displacement of reference
     ICPRegistration::Params icpParams;
+
+    // If non-empty: use this scanner name as a fixed reference instead of
+    // computing a GPA mean.  The named scanner is never ICP'd; all others
+    // are aligned to it.  The mean-mesh update step is skipped.
+    std::string fixedRefScannerName;
 };
 
 // Runs Generalized Procrustes Analysis on all scans.
