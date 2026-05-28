@@ -25,6 +25,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QFileDialog>
+#include <QSettings>
 #include <QMessageBox>
 #include <QProgressDialog>
 #include <QFuture>
@@ -406,11 +407,15 @@ void MainWindow::setupTab6Export()
 
 void MainWindow::openSTLFiles()
 {
+    QSettings s("DentScanCompare", "DentScanCompare");
+    const QString lastOpenDir = s.value("lastOpenDir", QDir::homePath()).toString();
+
     QStringList paths = QFileDialog::getOpenFileNames(
         this, "Open STL files",
-        QString(),
+        lastOpenDir,
         "STL files (*.stl *.STL);;All files (*)");
     if (paths.isEmpty()) return;
+    s.setValue("lastOpenDir", QFileInfo(paths.first()).absolutePath());
 
     m_scans.clear();
     m_gpaReference.reset();
@@ -547,9 +552,13 @@ void MainWindow::onAnalysisFinished()
 
 void MainWindow::showExportDialog()
 {
+    QSettings s("DentScanCompare", "DentScanCompare");
+    const QString lastExportDir = s.value("lastExportDir", QDir::homePath()).toString();
+
     QString dir = QFileDialog::getExistingDirectory(
-        this, "Select export directory", QDir::homePath());
+        this, "Select export directory", lastExportDir);
     if (dir.isEmpty()) return;
+    s.setValue("lastExportDir", dir);
 
     // Export fingerprint (QPainter renders to QImage, saved directly)
     if (m_scatterPlot) {
