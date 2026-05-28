@@ -419,6 +419,11 @@ void VTKMeshWidget::showToothSegmentation(const std::shared_ptr<ScanData>& scan,
         return;
     }
 
+    // Remove multi-scan overlay actors and make the single-mesh actor visible.
+    // setOverlayMeshes() hides m_actor; without this the segmentation colours
+    // are written to m_polyData but never displayed.
+    clearOverlayActors();
+
     // Rebuild the polydata with per-vertex RGB colours
     auto pd = cgalToVTK(scan->mesh);
 

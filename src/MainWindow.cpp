@@ -20,6 +20,7 @@
 #include <QAction>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QSplitter>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
@@ -191,11 +192,22 @@ void MainWindow::setupTab3Registration()
     m_tab3 = new QWidget;
     auto* hlay = new QHBoxLayout(m_tab3);
     hlay->setContentsMargins(4, 4, 4, 4);
+    hlay->setSpacing(0);
 
-    // left: controls
-    auto* ctrlPanel = new QGroupBox("Registration Settings", m_tab3);
-    ctrlPanel->setFixedWidth(220);
+    // left: controls inside a scroll area so the panel is resizable and
+    // all text remains readable even in narrow windows
+    auto* ctrlPanel = new QGroupBox("Registration Settings");
+    ctrlPanel->setMinimumWidth(180);
     auto* ctrlLayout = new QFormLayout(ctrlPanel);
+    ctrlLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+    auto* ctrlScroll = new QScrollArea(m_tab3);
+    ctrlScroll->setWidget(ctrlPanel);
+    ctrlScroll->setWidgetResizable(true);
+    ctrlScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ctrlScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ctrlScroll->setMinimumWidth(200);
+    ctrlScroll->setMaximumWidth(400);
 
     m_methodCombo = new QComboBox(ctrlPanel);
     m_methodCombo->addItem("GPA – mean reference (recommended)");
@@ -341,14 +353,19 @@ void MainWindow::setupTab3Registration()
     m_registrationStatus->setWordWrap(true);
     ctrlLayout->addRow(m_registrationStatus);
 
-    hlay->addWidget(ctrlPanel);
-
     // right: overlay view
     m_overlayWidget = new VTKMeshWidget(m_tab3);
     m_overlayWidget->setTitle("Overlay – enable 'Pick Tooth Seeds' then left-click one cusp per tooth");
     connect(m_overlayWidget, &VTKMeshWidget::pointPicked,
             this, &MainWindow::onPointPicked);
-    hlay->addWidget(m_overlayWidget, 1);
+
+    auto* splitter = new QSplitter(Qt::Horizontal, m_tab3);
+    splitter->addWidget(ctrlScroll);
+    splitter->addWidget(m_overlayWidget);
+    splitter->setStretchFactor(0, 0); // control panel: don't stretch by default
+    splitter->setStretchFactor(1, 1); // overlay: takes all extra space
+    splitter->setSizes({240, 800});
+    hlay->addWidget(splitter);
 
     m_tabs->addTab(m_tab3, "Registration");
 }
