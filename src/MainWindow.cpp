@@ -812,7 +812,7 @@ void MainWindow::recomputeMetrics()
     }
 
     // Determine active filter (priority: segmentation mask > plane > Z-window)
-    const bool  haveMask = !m_toothMask.empty();
+    const bool  haveMask = !m_pickedPts.empty();
     DistanceField::OcclusalPlane plane = m_occlusalPlane;
     if (plane.active && !haveMask) {
         plane.aboveMm = m_planeAboveSpin ? m_planeAboveSpin->value() : 2.0;
@@ -821,15 +821,23 @@ void MainWindow::recomputeMetrics()
     const double zWindow = (!haveMask && !plane.active && m_zWindowSpin)
                            ? m_zWindowSpin->value() : 0.0;
 
-    // For non-reference scans we re-use the same tooth mask (the mask was
-    // built on the highest-triangle scan but the geometry is aligned, so
-    // it is a good approximation for all scans).
+    // When seed points exist, re-run segmentation per scan so the mask vertex
+    // indices match each individual scan (different scans have different vertex
+    // counts — sharing one mask by index across scans silently mis-filters).
+    // All scans are in the same aligned coordinate frame after runAnalysis(), so
+    // the same world-space seed points produce correct seeds on every scan.
     setStatus("Recomputing metrics…");
+    std::size_t totalToothVerts = 0;
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
+        std::vector<bool> mask;
+        if (haveMask)
+            mask = ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts);
         DistanceField::fillReport(*m_scans[i], m_reports[i],
-                                  0.2, zWindow, plane, m_toothMask);
+                                  0.2, zWindow, plane, mask);
         ArchMetrics::computeBoundaryMetrics(*m_scans[i], m_reports[i]);
         ArchMetrics::computeStitchingArtifacts(*m_scans[i], m_reports[i]);
+        if (!mask.empty())
+            totalToothVerts += std::count(mask.begin(), mask.end(), true);
     }
 
     updateMetricsTab();
@@ -837,10 +845,10 @@ void MainWindow::recomputeMetrics()
     updateDistanceMapsTab();
 
     QString filterDesc = haveMask
-        ? QString("tooth segmentation (%1 vertices)")
-              .arg(std::count(m_toothMask.begin(), m_toothMask.end(), true))
+        ? QString("tooth segmentation (~%1 vertices/scan)")
+              .arg(totalToothVerts / m_scans.size())
         : plane.active
-            ? QString("plane slab (±%1/−%2 mm)")
+            ? QString("plane slab (+%1/−%2 mm)")
                   .arg(plane.aboveMm, 0,'f',1).arg(plane.belowMm, 0,'f',1)
             : zWindow > 0
                 ? QString("Z-window %1 mm").arg(zWindow, 0,'f',0)
