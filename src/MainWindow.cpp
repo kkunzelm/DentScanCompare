@@ -42,7 +42,7 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("DentScanCompare – Dental Scan Quality Analyzer");
+    setWindowTitle("DentScanCompare – Dental Scan Quality Analyzer   |   Prof. Dr. Karl-Heinz Kunzelmann");
     resize(1400, 900);
     setupUI();
     setupMenuAndToolbar();
@@ -100,9 +100,16 @@ void MainWindow::setupUI()
     setupTab4DistanceMaps();
     setupTab5Metrics();
     setupTab6Export();
+    setupTab7About();
 
     topLayout->addWidget(sidebar);
     topLayout->addWidget(m_tabs, 1);
+
+    // Wire scanner list → scatter-plot highlight.
+    // currentRowChanged(-1) when nothing is selected → deselects highlight.
+    connect(m_scanList, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (m_scatterPlot) m_scatterPlot->setHighlightSeries(row);
+    });
 }
 
 void MainWindow::setupMenuAndToolbar()
@@ -274,6 +281,7 @@ void MainWindow::setupTab3Registration()
 
     m_pickBtn = new QPushButton("📍 Pick Tooth Seeds", ctrlPanel);
     m_pickBtn->setCheckable(true);
+    m_pickBtn->setChecked(false);
     m_pickBtn->setToolTip(
         "Enable pick mode, then left-click once on each tooth crown\n"
         "in the overlay viewport.\n"
@@ -350,6 +358,14 @@ void MainWindow::setupTab3Registration()
     m_reregisterBtn->setEnabled(false);
     ctrlLayout->addRow(m_reregisterBtn);
 
+    m_keepSegChk = new QCheckBox("Keep segmentation after registration", ctrlPanel);
+    m_keepSegChk->setChecked(true);
+    m_keepSegChk->setToolTip(
+        "When checked, the segmentation colour overlay is restored in the\n"
+        "Registration viewport after running or recomputing registration.\n"
+        "Uncheck to see the semi-transparent multi-scan overlay instead.");
+    ctrlLayout->addRow(m_keepSegChk);
+
     // ── Occlusal Plane (fallback when no seeds are placed) ────────────────
     auto* sepLine2 = new QFrame(ctrlPanel);
     sepLine2->setFrameShape(QFrame::HLine);
@@ -388,10 +404,12 @@ void MainWindow::setupTab3Registration()
     ctrlLayout->addRow(m_pickCountLabel);
 
     m_showPlanesChk = new QCheckBox("Show plane disks", ctrlPanel);
-    m_showPlanesChk->setChecked(true);
+    m_showPlanesChk->setChecked(false);
     m_showPlanesChk->setToolTip(
-        "Toggle visibility of the three semi-transparent occlusal plane disks\n"
-        "(grey = plane, green = above, cyan = below).");
+        "Check to compute and display the three semi-transparent occlusal plane\n"
+        "disks (grey = plane, green = above, cyan = below).\n"
+        "The plane is fitted through the seed points when 3 or more are placed.\n"
+        "Uncheck to hide the disks without removing the seed spheres.");
     ctrlLayout->addRow(m_showPlanesChk);
 
     // ── wire picking signals ──────────────────────────────────────────────
@@ -406,12 +424,20 @@ void MainWindow::setupTab3Registration()
     connect(m_reregisterBtn,  &QPushButton::clicked,
             this, &MainWindow::recomputeRegistration);
     connect(m_showPlanesChk,  &QCheckBox::toggled, this, [this](bool on) {
-        if (m_overlayWidget) m_overlayWidget->setPlanesVisible(on);
+        if (!m_overlayWidget) return;
+        if (on && m_occlusalPlane.active)
+            updatePlaneVisualization();   // create actors now if not yet drawn
+        else
+            m_overlayWidget->setPlanesVisible(false);
     });
     connect(m_planeAboveSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double){ updatePlaneVisualization(); });
+            this, [this](double){
+                if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization();
+            });
     connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double){ updatePlaneVisualization(); });
+            this, [this](double){
+                if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization();
+            });
     // Re-run segmentation live when any parameter spinbox changes
     auto reSegment = [this](double){ if (!m_pickedPts.empty()) runSegmentation(); };
     connect(m_segGeodesicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -450,11 +476,50 @@ void MainWindow::setupTab4DistanceMaps()
 
     auto* infoLabel = new QLabel(
         "Distance Maps: signed distance from each scan to the GPA reference. "
-        "Blue = below reference (−), red = above reference (+). Scale: ±1 mm.", m_tab4);
+        "Blue = below reference (−), red = above reference (+).", m_tab4);
     infoLabel->setWordWrap(true);
     infoLabel->setStyleSheet("font-size: 10px; color: #444; padding: 2px;");
     vlay->addWidget(infoLabel);
 
+    // ── colour-scale control bar ─────────────────────────────────────────
+    auto* ctrlBar = new QWidget(m_tab4);
+    auto* ctrlRow = new QHBoxLayout(ctrlBar);
+    ctrlRow->setContentsMargins(0, 0, 0, 0);
+    ctrlRow->setSpacing(6);
+
+    ctrlRow->addWidget(new QLabel("Colour scale: ±", ctrlBar));
+    m_distScaleSpin = new QDoubleSpinBox(ctrlBar);
+    m_distScaleSpin->setRange(0.05, 10.0);
+    m_distScaleSpin->setSingleStep(0.05);
+    m_distScaleSpin->setDecimals(2);
+    m_distScaleSpin->setSuffix(" mm");
+    m_distScaleSpin->setValue(1.0);
+    m_distScaleSpin->setFixedWidth(110);
+    m_distScaleSpin->setToolTip(
+        "Clipping range for the false-colour distance maps.\n"
+        "Distances outside ±value are shown as solid red/blue.\n"
+        "This is a visual-only control — statistics are not affected.");
+    ctrlRow->addWidget(m_distScaleSpin);
+
+    auto* autoBtn = new QPushButton("⟳ Auto", ctrlBar);
+    autoBtn->setFixedWidth(80);
+    autoBtn->setToolTip(
+        "Reset to the automatic range (±H95 of the worst scanner, max 2 mm).");
+    ctrlRow->addWidget(autoBtn);
+    ctrlRow->addStretch();
+    vlay->addWidget(ctrlBar);
+
+    connect(m_distScaleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) {
+                m_distRangeAuto = false;
+                if (m_gpaReference) updateDistanceMapsTab();
+            });
+    connect(autoBtn, &QPushButton::clicked, this, [this] {
+        m_distRangeAuto = true;
+        if (m_gpaReference) updateDistanceMapsTab();
+    });
+
+    // ── viewport scroll area ──────────────────────────────────────────────
     auto* scroll = new QScrollArea(m_tab4);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -525,6 +590,76 @@ void MainWindow::setupTab6Export()
     vlay->addStretch();
 
     m_tabs->addTab(tab6, "Export");
+}
+
+void MainWindow::setupTab7About()
+{
+    auto* tab7 = new QWidget;
+    auto* vlay = new QVBoxLayout(tab7);
+    vlay->setContentsMargins(40, 40, 40, 40);
+    vlay->setSpacing(12);
+
+    auto makeLabel = [&](const QString& html, bool center = true) {
+        auto* l = new QLabel(html, tab7);
+        l->setTextFormat(Qt::RichText);
+        l->setOpenExternalLinks(true);
+        l->setWordWrap(true);
+        if (center) l->setAlignment(Qt::AlignHCenter);
+        return l;
+    };
+
+    vlay->addStretch(1);
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:22pt; font-weight:bold;'>DentScanCompare</span>"));
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:12pt; color:#555;'>"
+        "Dental Intraoral Scanner Quality Analyzer</span>"));
+
+    vlay->addSpacing(20);
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:14pt; font-weight:bold;'>"
+        "Prof. Dr. Karl-Heinz Kunzelmann</span>"));
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:11pt;'>"
+        "<a href='https://www.kunzelmann.de'>www.kunzelmann.de</a></span>"));
+
+    vlay->addSpacing(20);
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:9pt; color:#666;'>"
+        "Built with Qt 5.15 · VTK 9.3 · CGAL 6.0 · Eigen 3.4 · nanoflann 1.7</span>"));
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:9pt; color:#666;'>"
+        "C++20 · GPL v2 or later</span>"));
+
+    vlay->addSpacing(16);
+
+    auto* sep = new QFrame(tab7);
+    sep->setFrameShape(QFrame::HLine);
+    sep->setFrameShadow(QFrame::Sunken);
+    sep->setMaximumWidth(500);
+    auto* sepHlay = new QHBoxLayout;
+    sepHlay->addStretch(); sepHlay->addWidget(sep); sepHlay->addStretch();
+    vlay->addLayout(sepHlay);
+
+    vlay->addSpacing(8);
+
+    vlay->addWidget(makeLabel(
+        "<span style='font-size:9pt; color:#555;'>"
+        "Analysis pipeline: PCA coarse alignment · 4-orientation Z-rotation test · "
+        "GPA with true mean-reference update · Dijkstra tooth-crown segmentation · "
+        "Crown-restricted ICP refinement · CGAL AABB signed distance field · "
+        "Tessellation fingerprint (ATI)</span>",
+        false));
+
+    vlay->addStretch(2);
+
+    m_tabs->addTab(tab7, "About");
 }
 
 // -----------------------------------------------------------------------
@@ -674,6 +809,14 @@ void MainWindow::onAnalysisFinished()
     updateRegistrationTab();
     updateDistanceMapsTab();
     updateMetricsTab();
+
+    // Re-enable segmentation buttons when seeds are still placed after a
+    // recompute-registration cycle (buttons were disabled at the start of that run).
+    const bool haveSeeds = !m_pickedPts.empty() && !m_scans.empty();
+    if (m_recomputeBtn)
+        m_recomputeBtn->setEnabled(haveSeeds);
+    if (m_reregisterBtn && m_keepSegChk && m_keepSegChk->isChecked())
+        m_reregisterBtn->setEnabled(haveSeeds && m_gpaReference != nullptr);
 }
 
 void MainWindow::showExportDialog()
@@ -778,6 +921,10 @@ void MainWindow::updateRegistrationTab()
     if (m_overlayWidget && !m_scans.empty())
         m_overlayWidget->setOverlayMeshes(m_scans);
 
+    // Restore segmentation overlay if seeds are placed and user opted to keep it.
+    if (!m_pickedPts.empty() && m_keepSegChk && m_keepSegChk->isChecked())
+        runSegmentation();
+
     if (m_gpaReference && !m_reports.empty()) {
         double zw = m_zWindowSpin ? m_zWindowSpin->value() : 0.0;
         QString zoneStr = (zw > 0.0)
@@ -801,11 +948,22 @@ void MainWindow::updateDistanceMapsTab()
     if (!m_gpaReference) return;
 
     // auto-range: use 95th percentile of all distances
-    double maxDist = 0.5;
+    double autoMaxDist = 0.5;
     for (const auto& r : m_reports)
         if (!std::isnan(r.hausdorff95))
-            maxDist = std::max(maxDist, r.hausdorff95);
-    maxDist = std::min(maxDist, 2.0);
+            autoMaxDist = std::max(autoMaxDist, r.hausdorff95);
+    autoMaxDist = std::min(autoMaxDist, 2.0);
+
+    double maxDist;
+    if (m_distRangeAuto) {
+        if (m_distScaleSpin) {
+            QSignalBlocker blk(m_distScaleSpin);
+            m_distScaleSpin->setValue(autoMaxDist);
+        }
+        maxDist = autoMaxDist;
+    } else {
+        maxDist = m_distScaleSpin ? m_distScaleSpin->value() : autoMaxDist;
+    }
 
     // resize distance widgets if needed
     while (m_distWidgets.size() < m_scans.size()) {
@@ -863,7 +1021,8 @@ void MainWindow::onPointPicked(double x, double y, double z)
 
     if (n >= 3) {
         fitOcclusalPlane();
-        updatePlaneVisualization();
+        if (m_showPlanesChk && m_showPlanesChk->isChecked())
+            updatePlaneVisualization();
     }
 
     runSegmentation();

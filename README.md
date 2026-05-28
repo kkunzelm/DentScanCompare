@@ -150,8 +150,12 @@ are computed from the raw loaded mesh and do not depend on registration; this ta
 therefore available immediately after loading.
 
 The scatter plot shows one point per triangle for every loaded scan, colour-coded by
-scanner.  Detailed interpretation is in [Tessellation Fingerprint – Interpretation
-Guide](#tessellation-fingerprint--interpretation-guide).
+scanner.  With all five scanners visible simultaneously the plot can look crowded.
+**To inspect a single scanner:** click its name in the **Loaded Scans** list on the left,
+or click its row in the plot legend.  The selected scanner's dots are drawn at full opacity
+and on top; all other scanners are dimmed to near-invisible.  Click the same entry again
+to deselect and return to the full view.  Detailed interpretation is in
+[Tessellation Fingerprint – Interpretation Guide](#tessellation-fingerprint--interpretation-guide).
 
 ---
 
@@ -179,24 +183,52 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
 
 #### Option A – Tooth-crown segmentation (highest precision, recommended)
 
-1. In **Tab 3 – Registration**, click **Pick points**.  The cursor changes to a crosshair.
+1. In **Tab 3 – Registration**, find the **Tooth Crown Segmentation** panel and click
+   **📍 Pick Tooth Seeds**.  The button turns into **🛑 Stop Picking** while active.
 2. Click once on the **occlusal or incisal surface** of each tooth crown you want to
    include.  A yellow sphere marks each clicked point.  You need one click per tooth crown
    (not per cusp — one click anywhere on the crown is sufficient).
-3. Click **Stop picking** when done.  The software immediately runs a Dijkstra-based
+   **Camera navigation still works in pick mode:** drag to rotate, scroll to zoom.  Only a
+   short stationary click (< 6 pixels of mouse movement) registers as a seed point.
+3. Click **🛑 Stop Picking** when done.  The software immediately runs a Dijkstra-based
    region-growing algorithm from each seed point and colours the mesh:
    - **Ivory** = tooth crown (included in metrics)
    - **Dark grey** = gingiva / margins (excluded)
-4. If the segmentation is wrong, click **Clear** and repeat.
+   The status label below the button reports the vertex count of the segmented crown area.
+4. If the segmentation overshoots (gingiva included) or undershoots (parts of crown
+   missing), adjust the segmentation parameters before clicking **📍 Pick Tooth Seeds**
+   again:
+
+| Spinbox | Default | Effect |
+|---------|---------|--------|
+| Max geodesic | 12 mm | Maximum surface-path distance from any seed.  Decrease if adjacent teeth or gingiva bleed in; increase if parts of the crown are cut off. |
+| CEJ crease | 50° | Maximum crease angle between adjacent faces.  Decrease (e.g. 35°) to stop earlier at the gingival margin; increase (e.g. 65°) if the crown has sharp ridges. |
+| Min curvature | −4 /mm | Expansion stops when face mean κ_H drops below this floor (gingival sulcus guard).  Increase toward 0 (e.g. −2) to stop earlier; decrease (e.g. −6) if shallow crown concavities are being cut off. |
+
+5. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
+   segmentation overlay to be restored automatically whenever the registration is updated.
+   Uncheck it if you prefer to see the semi-transparent multi-scan overlay instead.
+6. Click **⟳  Recompute Metrics** to refresh distance statistics and the metrics table with
+   the new crown mask.
+7. Optionally click **⟳  Recompute Registration** for a crown-restricted ICP refinement
+   pass.  This re-runs ICP using only tooth-crown vertices for correspondences (3 mm search
+   radius, warm start from the existing alignment), then updates the GPA mean surface and
+   recomputes all distance fields.  Typical improvement: 0.02–0.05 mm RMS reduction by
+   excluding noisy gingival tissue from the ICP objective.
+   After the run completes, **⟳  Recompute Metrics** and **⟳  Recompute Registration** are
+   re-enabled automatically (if "Keep segmentation after registration" is checked), so you
+   can run the cycle again or compare metrics before and after.
+8. If the segmentation is still wrong, click **Clear Seeds** and repeat from step 1.
 
 The segmentation expands from each seed using surface-path (geodesic) distance as the
-primary stopping criterion (≤ 12 mm from the seed, which covers every tooth type from
-molar to incisor).  Two secondary guards stop expansion at the gingival margin: a crease-
-angle check (≥ 50° kink between adjacent face normals signals the CEJ) and a curvature
-floor (mean κ_H > −4 mm⁻¹ rejects the concave gingival sulcus).
+primary stopping criterion.  Two secondary guards stop expansion at the gingival margin: a
+crease-angle check (≥ 50° kink between adjacent face normals signals the CEJ) and a
+curvature floor (mean κ_H > −4 mm⁻¹ rejects the concave gingival sulcus).
 
-**Note:** The segmentation is computed on the first loaded scan and applied to all scans
-via vertex-index correspondence.  Place seeds on the scan with the most complete coverage.
+The segmentation is computed **independently for every loaded scan** using the same
+world-space seed coordinates.  This is necessary because different scanners capture
+different numbers of vertices; sharing a mask by vertex index would silently produce wrong
+results for all scans except the one the mask was built on.
 
 #### Option B – Fitted occlusal plane (medium precision)
 
@@ -208,8 +240,12 @@ an asymmetric slab around this plane that is kept for metrics.
 Default offsets: +2 mm above (minimal gingival inclusion), −12 mm below (includes full
 crown depth).  Adjust if the arch is unusually deep or the plane is picked on gingiva.
 
-The fitted plane and its slab are shown as three coloured disks in the Registration
-viewport (grey = plane, green = above zone, cyan = below zone).
+To visualise the fitted plane, check **Show plane disks** in the Occlusal Plane section.
+The checkbox starts unchecked; checking it draws three semi-transparent disks in the
+Registration viewport (grey = plane, green = above zone, cyan = below zone).  The plane is
+fitted silently whenever ≥ 3 seeds are placed and remains available for metrics even when
+the disks are hidden.  Adjusting "Above plane" or "Below plane" spinboxes only redraws
+the disks when the checkbox is checked.
 
 #### Option C – Z-window (coarse, legacy)
 
@@ -248,6 +284,20 @@ After completion, Tabs 3, 4, and 5 are populated automatically.
 encoding.  Drag to rotate, scroll to zoom.  All viewports share the same colour scale for
 direct visual comparison.
 
+**Masked display (when tooth-crown seeds have been placed):**  When a tooth-crown
+segmentation is active, the distance maps highlight only the crown vertices in the diverging
+blue–white–red colour map.  Non-crown vertices (gingiva, margins, palatinal tissue) are
+rendered in uniform **dark grey**.  This focuses the visual comparison on the clinically
+relevant crown area and removes gingival noise from the colour scale.  To see the full-mesh
+distance map, click **Clear Seeds** in the Registration tab and then **⟳  Recompute Metrics**.
+
+**Adjusting the colour scale:**  A **Colour scale: ± [value] mm** spinbox sits at the top
+of the Distance Maps tab.  Reducing the value clips the most extreme distances to solid
+red/blue and stretches the gradient over the remaining range, making small systematic
+differences visible.  This is a purely visual control — the statistical metrics (RMS, MAD,
+Hausdorff) in Tab 5 are not affected.  Click **⟳ Auto** to revert to the automatic range
+(±H95 of the worst scanner, max 2 mm).
+
 ---
 
 ### Step 7 – Read the Metrics table
@@ -266,6 +316,20 @@ any column header to sort.
 - `fingerprint.png` — tessellation scatter plot at 300 dpi
 - `distance_<scanner>.png` — distance map per scanner at 300 dpi
 - `metrics.csv` — full metrics table with UTF-8 BOM (opens correctly in Excel on Windows)
+
+---
+
+### About tab
+
+**Tab 7 – About** shows author information:
+
+- **Prof. Dr. Karl-Heinz Kunzelmann** — displayed in bold
+- Clickable link to [www.kunzelmann.de](http://www.kunzelmann.de)
+- Build stack (Qt, VTK, CGAL, Eigen versions)
+- Brief pipeline summary for orientation
+
+The **window title bar** also carries the author name:
+`DentScanCompare – Dental Scan Quality Analyzer   |   Prof. Dr. Karl-Heinz Kunzelmann`
 
 ---
 
@@ -412,6 +476,35 @@ same tooth is harmless but unnecessary.
 **Do not place seeds on gingiva.**  The algorithm expands outward from the seed; a seed on
 gingival tissue will try to grow into gingiva first.  Place seeds on the occlusal/incisal
 surface (cusps, marginal ridges, incisal edges).
+
+**The "Keep segmentation after registration" checkbox controls what you see in the
+Registration viewport.**  When checked (default), the ivory/grey segmentation overlay is
+restored automatically every time the registration is updated — after both **Run Analysis**
+and **⟳  Recompute Registration**.  When unchecked, the standard semi-transparent
+multi-scan overlay is shown instead.  The segmentation data itself (`m_pickedPts`,
+`m_toothMask`) is preserved either way; only the visual layer changes.
+
+**The fingerprint scatter plot can highlight one scanner at a time.**  Click a scanner
+name in the **Loaded Scans** list or in the plot legend to bring that scanner to the
+foreground.  The selected scanner's dots are drawn at full opacity on top of all others;
+the rest are dimmed.  Click the same entry again to return to the full view.  The
+highlighted state does not affect the ATI table or any statistics.
+
+**Camera navigation works normally in pick mode.**  While **📍 Pick Tooth Seeds** is
+active, drag with the left mouse button to rotate the model, and scroll the mouse wheel to
+zoom.  Only a short stationary click (< 6 pixels of movement) is interpreted as a seed
+placement.  You never need to exit pick mode to re-orient the view.
+
+**Segmentation is per-scan.**  The seed coordinates are world-space positions on the
+registered meshes.  The same seed points are applied independently to each loaded scan,
+so each scanner's mesh gets its own crown mask.  This is essential because different
+scanners have different vertex counts; a mask shared by vertex index would be silently
+wrong for all but the reference scan.
+
+**Last-used directories are remembered.**  The application stores the last directory you
+opened STL files from and the last export directory in your user settings
+(QSettings, application "DentScanCompare").  These are restored automatically the next
+time you open the file dialog or the export dialog.
 
 **GPA is self-referential.**  The mean reference surface is the centroid of all loaded
 scans.  Adding or removing a scan changes the reference, which changes the distance

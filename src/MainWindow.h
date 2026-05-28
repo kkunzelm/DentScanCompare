@@ -47,6 +47,7 @@ private:
     void setupTab4DistanceMaps();
     void setupTab5Metrics();
     void setupTab6Export();
+    void setupTab7About();
 
     // ---- update helpers ----
     void updateScannerList();
@@ -102,6 +103,7 @@ private:
     QPushButton*    m_recomputeBtn       = nullptr;
     QPushButton*    m_reregisterBtn      = nullptr;  // crown-restricted ICP warm start
     QCheckBox*      m_showPlanesChk      = nullptr;  // show/hide the three plane disks
+    QCheckBox*      m_keepSegChk         = nullptr;  // restore seg overlay after registration update
     QDoubleSpinBox* m_segGeodesicSpin    = nullptr;  // maxGeodesicMm
     QDoubleSpinBox* m_segCreaseSpin      = nullptr;  // maxCreaseAngleDeg
     QDoubleSpinBox* m_segCurvSpin        = nullptr;  // minMeanCurvature
@@ -118,8 +120,10 @@ private:
     std::vector<bool>                 m_toothMask;
 
     // ---- Tab 4: Distance Maps ----
-    QWidget*                    m_tab4       = nullptr;
+    QWidget*                    m_tab4           = nullptr;
     std::vector<VTKMeshWidget*> m_distWidgets;
+    QDoubleSpinBox*             m_distScaleSpin  = nullptr;
+    bool                        m_distRangeAuto  = true;
 
     // ---- Tab 5: Metrics ----
     MetricsTableWidget* m_metricsTable = nullptr;

@@ -2,6 +2,7 @@
 
 #include <QPainter>
 #include <QPaintEvent>
+#include <QMouseEvent>
 #include <QFontMetrics>
 
 #include <algorithm>
@@ -32,7 +33,28 @@ ScatterPlotWidget::ScatterPlotWidget(QWidget* parent)
 void ScatterPlotWidget::clear()
 {
     m_series.clear();
+    m_highlightIdx = -1;
     update();
+}
+
+void ScatterPlotWidget::setHighlightSeries(int idx)
+{
+    // idx may be a scan-list row; clamp to valid range (-1 = all)
+    if (idx >= static_cast<int>(m_series.size())) idx = -1;
+    m_highlightIdx = idx;
+    update();
+}
+
+void ScatterPlotWidget::mousePressEvent(QMouseEvent* ev)
+{
+    for (int i = 0; i < static_cast<int>(m_legendRowRects.size()); ++i) {
+        if (m_legendRowRects[i].contains(ev->pos())) {
+            m_highlightIdx = (m_highlightIdx == i) ? -1 : i; // toggle
+            update();
+            return;
+        }
+    }
+    QWidget::mousePressEvent(ev);
 }
 
 void ScatterPlotWidget::setScans(
@@ -151,17 +173,30 @@ void ScatterPlotWidget::drawChart(QPainter& p, int W, int H) const
     p.drawRect(mL, mT, pw, ph);
 
     // --- Data points ---
+    // When one series is highlighted: draw all others first (dimmed), then the
+    // highlighted series on top at full opacity so it is never occluded.
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
-    for (const auto& s : m_series) {
-        QColor c = s.color; c.setAlpha(80);
+
+    auto drawSeries = [&](int si, int alpha, int radius) {
+        QColor c = m_series[si].color;
+        c.setAlpha(alpha);
         p.setBrush(c);
-        for (std::size_t i = 0; i < s.xLog.size(); ++i) {
-            int px = toPixX(s.xLog[i]);
-            int py = toPixY(s.yLog[i]);
+        for (std::size_t i = 0; i < m_series[si].xLog.size(); ++i) {
+            int px = toPixX(m_series[si].xLog[i]);
+            int py = toPixY(m_series[si].yLog[i]);
             if (px < mL || px > mL+pw || py < mT || py > mT+ph) continue;
-            p.drawEllipse(px-2, py-2, 4, 4);
+            p.drawEllipse(px - radius, py - radius, 2*radius, 2*radius);
         }
+    };
+
+    if (m_highlightIdx < 0 || m_highlightIdx >= static_cast<int>(m_series.size())) {
+        for (int si = 0; si < static_cast<int>(m_series.size()); ++si)
+            drawSeries(si, 80, 2);
+    } else {
+        for (int si = 0; si < static_cast<int>(m_series.size()); ++si)
+            if (si != m_highlightIdx) drawSeries(si, 18, 1);
+        drawSeries(m_highlightIdx, 200, 3);
     }
     p.setRenderHint(QPainter::Antialiasing, false);
 
@@ -226,21 +261,50 @@ void ScatterPlotWidget::drawChart(QPainter& p, int W, int H) const
     // --- Legend ---
     int lx = mL + pw + 12;
     int ly = mT + 4;
-    int lh = static_cast<int>(m_series.size()) * 22 + 12;
+    int rowH = 22;
+    int lh = static_cast<int>(m_series.size()) * rowH + 12;
     int lw = mR - 18;
 
     p.setPen(QPen(QColor(80, 80, 80), 1));
     p.setBrush(QColor(255, 255, 255, 220));
     p.drawRect(lx, ly, lw, lh);
-    p.setPen(Qt::black);
 
+    m_legendRowRects.resize(m_series.size());
     for (std::size_t si = 0; si < m_series.size(); ++si) {
-        int gy = ly + 8 + static_cast<int>(si) * 22;
+        int gy = ly + 6 + static_cast<int>(si) * rowH;
+        QRect rowRect(lx + 2, gy, lw - 4, rowH - 2);
+        m_legendRowRects[si] = rowRect;
+
+        // Highlight background for the selected entry
+        const bool selected = (static_cast<int>(si) == m_highlightIdx);
+        if (selected) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(255, 240, 150, 200));
+            p.drawRect(rowRect);
+        }
+
+        // Colour swatch
         p.setPen(Qt::NoPen);
         p.setBrush(m_series[si].color);
-        p.drawRect(lx + 6, gy + 2, 14, 12);
+        p.drawRect(lx + 6, gy + 3, 14, 12);
+
+        // Label — bold when selected
+        QFont lf = sFont;
+        lf.setBold(selected);
+        p.setFont(lf);
         p.setPen(Qt::black);
-        p.drawText(lx + 25, gy, lw - 30, 16, Qt::AlignVCenter,
+        p.drawText(lx + 25, gy, lw - 30, rowH - 2, Qt::AlignVCenter,
                    QString::fromStdString(m_series[si].name));
+    }
+    p.setFont(sFont); // restore
+
+    // "Click to highlight" hint below the legend
+    if (m_highlightIdx < 0) {
+        QFont hintF = sFont; hintF.setPointSize(std::max(6, hintF.pointSize() - 1));
+        p.setFont(hintF);
+        p.setPen(QColor(130, 130, 130));
+        p.drawText(lx, ly + lh + 2, lw, 20, Qt::AlignHCenter,
+                   "click to highlight");
+        p.setFont(sFont);
     }
 }

@@ -182,16 +182,21 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 
 ---
 
-## GUI layout (6 tabs)
+## GUI layout (7 tabs)
 
 | Tab | Content |
 |-----|---------|
 | Overview | 5 × VTKMeshWidget with Phong shading |
-| Fingerprint | QPainter log-log scatter (triangle area vs. |κ|), ATI table |
-| Registration | Overlay VTKMeshWidget (all 5 scans semi-transparent), RMS status |
-| Distance Maps | 5 × VTKMeshWidget with diverging colour map (blue–white–red, ±maxDist mm) |
+| Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
+| Registration | Overlay VTKMeshWidget (all 5 scans semi-transparent), RMS status.  Left panel (QScrollArea) contains three sections: (1) **Registration Settings** — method combo, ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label, Clear Seeds, Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
+| Distance Maps | 5 × VTKMeshWidget with diverging colour map (blue–white–red).  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
+| About | Rich-text QLabel with author name (Prof. Dr. Karl-Heinz Kunzelmann), clickable link to www.kunzelmann.de, build-stack list (Qt / VTK / CGAL / Eigen), and pipeline summary. |
+
+**Window title:** `DentScanCompare – Dental Scan Quality Analyzer   |   Prof. Dr. Karl-Heinz Kunzelmann`
+
+**GPU usage:** VTK rendering uses OpenGL (GPU).  All computation — CGAL curvature, ICP/GPA, distance field, metrics — runs on CPU only.  No CUDA/OpenCL path.
 
 ---
 
@@ -208,11 +213,139 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
   (κ, °, ²) – these render correctly on Windows with BOM.
 - Tooth segmentation seed points must be placed manually once per session; they are not
   persisted across restarts.  Automatic seed detection (local Z/κ_H maxima per tooth) would
-  eliminate the manual step.
+  eliminate the manual step.  The seed coordinates are world-space (post-PCA) so they would
+  need to be stored together with the GPA transform to be reusable across sessions.
 
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-28 – About tab, window title, manuscript PDF
+
+- `MainWindow::setupTab7About()`: new 7th tab with rich-text author credit, clickable
+  `www.kunzelmann.de` link, build-stack list, and pipeline summary paragraph.
+- `setWindowTitle()` updated to include `Prof. Dr. Karl-Heinz Kunzelmann` alongside the
+  application name.
+- `docs/manuscript.md` updated: Methods rewritten to include Dijkstra segmentation (Stage 5)
+  and crown-restricted ICP (Stage 6); Results updated with crown-restricted metrics tables
+  (showing rank reversal: Medit i700 best, FussenS6000 worst at crown level); Discussion
+  extended with rank-reversal significance and crown-ICP methodology sections.
+- `build/manuscript.pdf` generated via pandoc → HTML → Chromium headless; figures scaled
+  to 60% page width; page-break-before each Figure 2–6 via Python HTML post-processing.
+
+### 2026-05-28 – Fingerprint highlight, distance-map scale control, UX fixes
+
+**Scatter-plot single-scanner highlight.**  `ScatterPlotWidget` now supports a highlighted
+series via `setHighlightSeries(int idx)` (−1 = all equal).  In highlight mode the selected
+series is drawn last (on top) at alpha=200, radius=3 px; all other series are drawn first
+at alpha=18, radius=1 px so they remain visible as context but don't compete.  The legend
+row of the selected scanner gets a yellow fill and bold text; a "click to highlight" hint
+appears below the legend when nothing is selected.  `mousePressEvent` hit-tests against
+`m_legendRowRects` (populated by `drawChart` on each paint) to toggle the highlight on
+legend clicks.  Clicking the same entry again deselects (→ -1).
+`MainWindow::setupUI()` wires `m_scanList::currentRowChanged(int)` to
+`m_scatterPlot->setHighlightSeries(int)` so the Loaded-Scans list on the left panel drives
+the same highlight.
+
+**Distance-map colour-scale spinbox.**  `setupTab4DistanceMaps()` now adds a horizontal
+control bar above the viewport row: a `QDoubleSpinBox m_distScaleSpin` (range 0.05–10 mm,
+step 0.05, suffix " mm") and a `⟳ Auto` button.  `bool m_distRangeAuto` (default `true`)
+tracks whether the user has taken manual control.  `updateDistanceMapsTab()` auto-computes
+`autoMaxDist` as before (H95 capped at 2 mm); when `m_distRangeAuto` is true the spinbox
+is updated (via `QSignalBlocker`) to match; when false the spinbox value is used.  The
+`⟳ Auto` button sets `m_distRangeAuto = true` and calls `updateDistanceMapsTab()`.  The
+spinbox `valueChanged` sets `m_distRangeAuto = false` and refreshes (guarded: only when
+`m_gpaReference` is non-null).  Statistics are unaffected — only the VTK LUT range changes.
+
+**Plane disks only show on explicit checkbox check.**  Previously `onPointPicked()` called
+`updatePlaneVisualization()` (and thus showed the three disk actors) automatically once ≥ 3
+seeds were placed; spinbox changes also auto-updated the disks.  Behaviour changed:
+`fitOcclusalPlane()` runs silently on every pick (so the plane data is always fresh for
+metrics), but `updatePlaneVisualization()` is only called when `m_showPlanesChk->isChecked()`.
+`m_showPlanesChk` default changed from `true` to `false`.  The checkbox `toggled` handler
+was updated: on check → if plane active, call `updatePlaneVisualization()` (creates actors);
+on uncheck → call `setPlanesVisible(false)`.  The above/below spinbox `valueChanged` lambdas
+also guard on `m_showPlanesChk->isChecked()`.
+
+**Keep-segmentation checkbox.**  New `QCheckBox* m_keepSegChk` ("Keep segmentation after
+registration", default checked) added in the Tooth Crown Segmentation panel after the
+Recompute Registration button.  `updateRegistrationTab()` now calls `runSegmentation()`
+after `setOverlayMeshes()` when `!m_pickedPts.empty() && m_keepSegChk->isChecked()`, so
+the ivory/grey overlay is always restored.  When unchecked the standard semi-transparent
+overlay is shown instead.
+
+**Button re-enable after recompute registration.**  `onAnalysisFinished()` now re-enables
+`m_recomputeBtn` when seeds are present, and re-enables `m_reregisterBtn` when seeds are
+present AND `m_keepSegChk->isChecked()` AND `m_gpaReference != nullptr`.  This allows
+repeated Recompute Registration → Recompute Metrics cycles without manually re-placing seeds.
+
+**Pick button explicit initial state.**  `m_pickBtn->setChecked(false)` added immediately
+after `setCheckable(true)` so the button always starts in the "📍 Pick Tooth Seeds"
+(unpressed) visual state, regardless of platform or Qt theme.
+
+### 2026-05-28 – Per-scan masks, QSettings, Registration-tab restructure, masked distance maps
+
+**Per-scan segmentation mask fix.**  `MainWindow::recomputeMetrics()` previously computed
+one mask on `m_scans[0]` and reused it for all scans.  `DistanceField::fillReport` guards
+`toothMask.size() == scan.mesh.num_vertices()` — so the mask was silently rejected for every
+scan except the reference, and all metrics were computed on the full mesh.  Fix: call
+`ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts, segParams)` per scan inside
+the loop.  `updateDistanceMapsTab()` does the same.
+
+**QSettings directory persistence.**  `openSTLFiles()` and `showExportDialog()` now restore
+and persist `lastOpenDir` / `lastExportDir` via `QSettings("DentScanCompare","DentScanCompare")`.
+
+**Registration tab restructure.**  Left control panel reorganised into three named sections:
+(1) Registration Settings (method, ICP iterations, sample points, occlusal-zone spinbox),
+(2) Tooth Crown Segmentation (pick button, seed status, Clear Seeds, parameter spinboxes,
+Recompute Metrics, Recompute Registration), (3) Fitted Occlusal Plane (above/below spinboxes,
+plane-point label, Show plane disks checkbox).  Panel wrapped in `QScrollArea` (min 200, max
+400 px) inside a `QSplitter` so narrow screens can still read all controls.
+
+**Live segmentation parameters.**  Three `QDoubleSpinBox` controls added to the Tooth Crown
+Segmentation panel: Max geodesic (3–25 mm, default 12), CEJ crease (10–80°, default 50°),
+Min curvature (−10–0 /mm, default −4).  `runSegmentation()` reads these values and re-runs
+the Dijkstra pass immediately; re-picking seeds is not required when only adjusting
+parameters.
+
+**Camera rotation in pick mode.**  `VTKMeshWidget::eventFilter` was rewritten to detect
+click-vs-drag by recording the mouse-press position in `m_pressPos` and comparing against
+the release position (< 6 px Manhattan distance = seed pick; otherwise VTK handles rotation
+normally).  Both press and release events return `false` (not consumed) so VTK's interactor
+still sees them for rotation.
+
+**Recompute Registration (warm-start crown ICP).**  `MainWindow::recomputeRegistration()`
+runs via `QtConcurrent::run`; for each scan it calls `ICPRegistration::alignMasked()` with
+the per-scan crown mask and a 3 mm correspondence radius (warm start from existing alignment).
+After all scans are realigned, `GPAReference::updateMeanMesh()` is called to keep the mean
+surface current, then `DistanceField::compute()` rebuilds the per-vertex distances.
+Button is enabled only after at least one seed is placed **and** GPA has run at least once.
+
+**Plane visibility checkbox.**  "Show plane disks" `QCheckBox` toggles `VTKMeshWidget::
+setPlanesVisible(bool)` on the overlay widget.  `setPlanesVisible` iterates `m_planeActors`
+and calls `SetVisibility`.
+
+**Z-window interlock.**  When `runSegmentation()` produces a mask, the "Occlusal zone"
+spinbox is disabled (`setEnabled(false)`) so the (less-accurate) Z-window cannot conflict
+with the tooth mask in `fillReport`.  `clearPickedPoints()` re-enables it.
+
+**VTK actor separation.**  `m_pickActors` vector renamed/split into `m_sphereActors` (seed
+point yellow spheres) and `m_planeActors` (three occlusal-plane disk actors).  `showPickSpheres`
+writes to `m_sphereActors`; `showOcclusalPlane` writes to `m_planeActors`.  `clearPickActors`
+clears both.  `setPlanesVisible` touches only `m_planeActors`, allowing seeds and plane disks
+to be controlled independently.
+
+**Masked distance map rendering.**  `VTKMeshWidget::showDistanceMap(scan, min, max, toothMask)`
+overload added.  Crown vertices get their colour via the existing VTK LUT; non-crown vertices
+are written as RGBA (55,55,55,255) directly into a `vtkUnsignedCharArray`.  The array is
+assigned with `SetColorModeToDirectScalars()` so VTK bypasses the LUT for non-crown cells.
+The scalar bar remains visible and correctly calibrated to the crown-vertex colour range.
+
+**Segmentation visibility fix.**  `VTKMeshWidget::showToothSegmentation()` previously wrote
+vertex colours to `m_polyData` / `m_actor` but `m_actor` was hidden by `setOverlayMeshes()`
+(which calls `m_actor->VisibilityOff()`).  Fix: `showToothSegmentation()` now calls
+`clearOverlayActors()` first, which removes the semi-transparent overlay actors and turns
+`m_actor` back on.
 
 ### 2026-05-28 – Dijkstra tooth-crown segmentation + occlusal-plane UI
 
