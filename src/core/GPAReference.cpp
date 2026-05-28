@@ -170,6 +170,13 @@ void updateToMeanMesh(ScanData& gpaRef,
 
 } // namespace
 
+// ─── Public mean-mesh update ─────────────────────────────────────────────────
+void updateMeanMesh(ScanData& gpaRef,
+                    const std::vector<std::shared_ptr<ScanData>>& scans)
+{
+    updateToMeanMesh(gpaRef, scans);
+}
+
 // ─── Main GPA entry point ────────────────────────────────────────────────────
 std::shared_ptr<ScanData> compute(
     std::vector<std::shared_ptr<ScanData>>& scans,

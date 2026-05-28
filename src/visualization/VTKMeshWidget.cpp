@@ -293,18 +293,24 @@ bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
 
 void VTKMeshWidget::clearPickActors()
 {
-    for (auto& a : m_pickActors)
-        m_renderer->RemoveActor(a);
-    m_pickActors.clear();
+    for (auto& a : m_sphereActors) m_renderer->RemoveActor(a);
+    m_sphereActors.clear();
+    for (auto& a : m_planeActors)  m_renderer->RemoveActor(a);
+    m_planeActors.clear();
+    m_renderWindow->Render();
+}
+
+void VTKMeshWidget::setPlanesVisible(bool visible)
+{
+    for (auto& a : m_planeActors)
+        a->SetVisibility(visible ? 1 : 0);
     m_renderWindow->Render();
 }
 
 void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts)
 {
-    // Remove existing spheres, keep plane actors (last 3 if present)
-    for (auto& a : m_pickActors)
-        m_renderer->RemoveActor(a);
-    m_pickActors.clear();
+    for (auto& a : m_sphereActors) m_renderer->RemoveActor(a);
+    m_sphereActors.clear();
 
     for (const auto& pt : pts) {
         auto sphere = vtkSmartPointer<vtkSphereSource>::New();
@@ -323,7 +329,7 @@ void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts
         actor->GetProperty()->SetDiffuse(0.6);
 
         m_renderer->AddActor(actor);
-        m_pickActors.push_back(actor);
+        m_sphereActors.push_back(actor);
     }
     m_renderWindow->Render();
 }
@@ -380,38 +386,26 @@ void VTKMeshWidget::showOcclusalPlane(const Eigen::Vector3d& normal,
                                        double aboveMm, double belowMm,
                                        double radius)
 {
-    // Remove existing plane actors (keep sphere actors for picked points)
-    // Plane actors are always appended after spheres, so we remove from the
-    // last 3 entries if they are planes.  Simplest: rebuild all from scratch.
-    // (spheres are re-drawn by the caller via showPickSpheres before this)
-
-    // Remove any previous plane actors tagged in m_pickActors
-    // We tag plane actors by storing them at the end; clear all and let
-    // caller re-add spheres.  Actual spheres are passed through showPickSpheres
-    // which is called first by the MainWindow.
-    for (auto& a : m_pickActors)
-        m_renderer->RemoveActor(a);
-    m_pickActors.clear();
+    // Remove and rebuild plane disk actors (spheres are in m_sphereActors, untouched).
+    for (auto& a : m_planeActors) m_renderer->RemoveActor(a);
+    m_planeActors.clear();
 
     // Central plane – grey, 30% opacity
-    auto planeActor = makeDiskActor(normal, origin, radius, 0.30,
-                                    0.6, 0.6, 0.6);
+    auto planeActor = makeDiskActor(normal, origin, radius, 0.30, 0.6, 0.6, 0.6);
     m_renderer->AddActor(planeActor);
-    m_pickActors.push_back(planeActor);
+    m_planeActors.push_back(planeActor);
 
     // Above-offset plane – green, 20% opacity
-    Eigen::Vector3d aboveOrigin = origin + aboveMm * normal;
-    auto aboveActor = makeDiskActor(normal, aboveOrigin, radius, 0.20,
+    auto aboveActor = makeDiskActor(normal, origin + aboveMm * normal, radius, 0.20,
                                     0.2, 0.8, 0.2);
     m_renderer->AddActor(aboveActor);
-    m_pickActors.push_back(aboveActor);
+    m_planeActors.push_back(aboveActor);
 
     // Below-offset plane – cyan, 20% opacity
-    Eigen::Vector3d belowOrigin = origin - belowMm * normal;
-    auto belowActor = makeDiskActor(normal, belowOrigin, radius, 0.20,
+    auto belowActor = makeDiskActor(normal, origin - belowMm * normal, radius, 0.20,
                                     0.2, 0.6, 0.9);
     m_renderer->AddActor(belowActor);
-    m_pickActors.push_back(belowActor);
+    m_planeActors.push_back(belowActor);
 
     m_renderWindow->Render();
 }

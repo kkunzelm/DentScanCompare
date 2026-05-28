@@ -340,6 +340,16 @@ void MainWindow::setupTab3Registration()
     m_recomputeBtn->setEnabled(false);
     ctrlLayout->addRow(m_recomputeBtn);
 
+    m_reregisterBtn = new QPushButton("⟳  Recompute Registration", ctrlPanel);
+    m_reregisterBtn->setToolTip(
+        "Re-run point-to-plane ICP for each scan starting from the current\n"
+        "alignment (warm start), using only tooth-crown vertices.\n"
+        "This refines the registration by excluding gingival tissue and\n"
+        "scan margins that introduce noise.\n"
+        "Runs in background — updates Registration, Distance Maps and Metrics.");
+    m_reregisterBtn->setEnabled(false);
+    ctrlLayout->addRow(m_reregisterBtn);
+
     // ── Occlusal Plane (fallback when no seeds are placed) ────────────────
     auto* sepLine2 = new QFrame(ctrlPanel);
     sepLine2->setFrameShape(QFrame::HLine);
@@ -377,6 +387,13 @@ void MainWindow::setupTab3Registration()
     m_pickCountLabel->setWordWrap(true);
     ctrlLayout->addRow(m_pickCountLabel);
 
+    m_showPlanesChk = new QCheckBox("Show plane disks", ctrlPanel);
+    m_showPlanesChk->setChecked(true);
+    m_showPlanesChk->setToolTip(
+        "Toggle visibility of the three semi-transparent occlusal plane disks\n"
+        "(grey = plane, green = above, cyan = below).");
+    ctrlLayout->addRow(m_showPlanesChk);
+
     // ── wire picking signals ──────────────────────────────────────────────
     connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
@@ -384,8 +401,13 @@ void MainWindow::setupTab3Registration()
     });
     connect(m_clearPickBtn, &QPushButton::clicked,
             this, &MainWindow::clearPickedPoints);
-    connect(m_recomputeBtn, &QPushButton::clicked,
+    connect(m_recomputeBtn,   &QPushButton::clicked,
             this, &MainWindow::recomputeMetrics);
+    connect(m_reregisterBtn,  &QPushButton::clicked,
+            this, &MainWindow::recomputeRegistration);
+    connect(m_showPlanesChk,  &QCheckBox::toggled, this, [this](bool on) {
+        if (m_overlayWidget) m_overlayWidget->setPlanesVisible(on);
+    });
     connect(m_planeAboveSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double){ updatePlaneVisualization(); });
     connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -829,6 +851,7 @@ void MainWindow::onPointPicked(double x, double y, double z)
 
     runSegmentation();
     m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
+    if (m_reregisterBtn) m_reregisterBtn->setEnabled(n >= 1 && !m_scans.empty() && m_gpaReference != nullptr);
 }
 
 void MainWindow::runSegmentation()
@@ -864,6 +887,9 @@ void MainWindow::runSegmentation()
 
         if (m_overlayWidget)
             m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
+
+        // Disable the Z-window spinbox — the tooth mask takes priority
+        if (m_zWindowSpin) m_zWindowSpin->setEnabled(false);
     } else {
         if (m_segStatusLabel)
             m_segStatusLabel->setText(
@@ -882,6 +908,8 @@ void MainWindow::clearPickedPoints()
     if (m_segStatusLabel) m_segStatusLabel->setText("No seeds placed.");
     if (m_pickCountLabel) m_pickCountLabel->setText("Plane: not fitted yet.");
     m_recomputeBtn->setEnabled(false);
+    if (m_reregisterBtn)  m_reregisterBtn->setEnabled(false);
+    if (m_zWindowSpin)    m_zWindowSpin->setEnabled(true);
     if (m_overlayWidget) {
         m_overlayWidget->clearPickActors();
         if (!m_scans.empty()) {
@@ -986,4 +1014,54 @@ void MainWindow::recomputeMetrics()
                 ? QString("Z-window %1 mm").arg(zWindow, 0,'f',0)
                 : "full scan";
     setStatus("Metrics updated – filter: " + filterDesc + ".");
+}
+
+void MainWindow::recomputeRegistration()
+{
+    if (m_scans.empty() || !m_gpaReference || m_pickedPts.empty()) {
+        setStatus("Run initial registration and place tooth seeds first.");
+        return;
+    }
+
+    ToothSegmentation::Params segParams;
+    if (m_segGeodesicSpin) segParams.maxGeodesicMm     = m_segGeodesicSpin->value();
+    if (m_segCreaseSpin)   segParams.maxCreaseAngleDeg = m_segCreaseSpin->value();
+    if (m_segCurvSpin)     segParams.minMeanCurvature  = m_segCurvSpin->value();
+
+    ICPRegistration::Params icpParams;
+    if (m_maxIterSpin) icpParams.maxIterations = m_maxIterSpin->value();
+    if (m_sampleSpin)  icpParams.sampleCount   = m_sampleSpin->value();
+    icpParams.maxCorrespDist = 3.0; // tighter than initial GPA (already nearby)
+
+    setStatus("Recomputing registration from tooth crowns...");
+    m_progress->setValue(0);
+    m_progress->show();
+    if (m_reregisterBtn) m_reregisterBtn->setEnabled(false);
+    if (m_recomputeBtn)  m_recomputeBtn->setEnabled(false);
+
+    auto scans     = m_scans;
+    auto gpaRef    = m_gpaReference;
+    auto pickedPts = m_pickedPts;
+    auto sParams   = segParams;
+    auto iParams   = icpParams;
+
+    auto future = QtConcurrent::run([scans, gpaRef, pickedPts, sParams, iParams]() mutable {
+        for (auto& scan : scans) {
+            std::vector<bool> mask =
+                ToothSegmentation::segmentFromPoints(*scan, pickedPts, sParams);
+            auto res = ICPRegistration::alignMasked(*scan, *gpaRef, mask, iParams);
+            if (res.iterations > 0)
+                ICPRegistration::applyTransform(*scan, res.transform);
+        }
+        GPAReference::updateMeanMesh(*gpaRef, scans);
+        for (auto& scan : scans)
+            DistanceField::compute(*scan, *gpaRef);
+    });
+
+    if (!m_analysisWatcher) {
+        m_analysisWatcher = new QFutureWatcher<void>(this);
+        connect(m_analysisWatcher, &QFutureWatcher<void>::finished,
+                this, &MainWindow::onAnalysisFinished);
+    }
+    m_analysisWatcher->setFuture(future);
 }

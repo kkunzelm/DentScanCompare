@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QSpinBox>
 #include <QFutureWatcher>
 #include <Eigen/Core>
@@ -56,8 +57,9 @@ private:
     void clearPickedPoints();
     void fitOcclusalPlane();        // least-squares plane through m_pickedPts
     void updatePlaneVisualization();
-    void recomputeMetrics();        // re-run distance+arch steps without re-running ICP
-    void runSegmentation();         // re-run tooth segmentation with current params+seeds
+    void recomputeMetrics();          // re-run distance+arch steps without re-running ICP
+    void runSegmentation();           // re-run tooth segmentation with current params+seeds
+    void recomputeRegistration();     // warm-start ICP using tooth mask, then update metrics
     void updateOverviewTab();
     void updateFingerprintTab();
     void updateRegistrationTab();
@@ -98,6 +100,8 @@ private:
     QLabel*         m_segStatusLabel     = nullptr;  // shows seed count + vertex count
     QPushButton*    m_clearPickBtn       = nullptr;
     QPushButton*    m_recomputeBtn       = nullptr;
+    QPushButton*    m_reregisterBtn      = nullptr;  // crown-restricted ICP warm start
+    QCheckBox*      m_showPlanesChk      = nullptr;  // show/hide the three plane disks
     QDoubleSpinBox* m_segGeodesicSpin    = nullptr;  // maxGeodesicMm
     QDoubleSpinBox* m_segCreaseSpin      = nullptr;  // maxCreaseAngleDeg
     QDoubleSpinBox* m_segCurvSpin        = nullptr;  // minMeanCurvature

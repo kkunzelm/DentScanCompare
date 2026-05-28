@@ -58,8 +58,11 @@ public:
                            double aboveMm, double belowMm,
                            double radius = 38.0);
 
-    // Remove all pick-related actors (spheres and plane).
+    // Remove all pick-related actors (spheres and plane disks).
     void clearPickActors();
+
+    // Show or hide the three occlusal-plane disk actors without removing them.
+    void setPlanesVisible(bool visible);
 
     // Colour-code the mesh by segmentation: tooth = warm ivory,
     // gingiva = dark grey.  Pass an empty mask to revert to plain shading.
@@ -92,7 +95,8 @@ private:
     QPoint                   m_pressPos;              // for click-vs-drag detection
 
     std::vector<vtkSmartPointer<vtkActor>> m_overlayActors;
-    std::vector<vtkSmartPointer<vtkActor>> m_pickActors;   // spheres + planes
+    std::vector<vtkSmartPointer<vtkActor>> m_sphereActors; // seed point spheres
+    std::vector<vtkSmartPointer<vtkActor>> m_planeActors;  // three occlusal disks
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;

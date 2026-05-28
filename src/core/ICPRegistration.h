@@ -38,6 +38,17 @@ void applyTransform(ScanData& scan, const Eigen::Matrix4d& T);
 // Uniformly samples ~count points from a mesh (area-weighted sampling).
 std::vector<Eigen::Vector3d> sampleMesh(const ScanData& scan, int count);
 
+// Like align(), but only samples source vertices where sourceMask[v] is true.
+// Use this for crown-restricted refinement after an initial full-mesh GPA.
+// Falls back to full-mesh sampling if the masked region is too small.
+Result alignMasked(
+    const ScanData& source,
+    const ScanData& target,
+    const std::vector<bool>& sourceMask,
+    const Params&   params = {},
+    std::function<void(int, double)> progressCallback = nullptr
+);
+
 // Computes per-vertex normals for ICP.
 std::vector<Eigen::Vector3d> computeVertexNormals(const ScanData& scan);
 

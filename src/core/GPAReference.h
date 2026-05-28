@@ -19,6 +19,13 @@ struct Params {
     std::string fixedRefScannerName;
 };
 
+// Updates the GPA reference mesh vertices to the centroid of closest points
+// on all aligned scans (AABB query per scan).  Call after re-registering
+// to keep the mean surface consistent.
+void updateMeanMesh(
+    ScanData& gpaRef,
+    const std::vector<std::shared_ptr<ScanData>>& scans);
+
 // Runs Generalized Procrustes Analysis on all scans.
 // - Picks the scan with the most triangles as initial reference.
 // - Iteratively: register all to reference, compute new reference as mean,
