@@ -174,6 +174,55 @@ void VTKMeshWidget::showDistanceMap(const std::shared_ptr<ScanData>& scan,
     m_renderWindow->Render();
 }
 
+void VTKMeshWidget::showDistanceMap(const std::shared_ptr<ScanData>& scan,
+                                     double rangeMin, double rangeMax,
+                                     const std::vector<bool>& toothMask)
+{
+    if (!scan || !scan->distanceComputed) return;
+
+    const bool useMask = !toothMask.empty() &&
+                         toothMask.size() == scan->mesh.num_vertices();
+    if (!useMask) {
+        showDistanceMap(scan, rangeMin, rangeMax);
+        return;
+    }
+
+    auto lut = ColorMapLUT::divergingBWR(rangeMin, rangeMax);
+
+    // Per-vertex RGBA: tooth → diverging colour from LUT, gingiva → dark grey.
+    auto colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    colors->SetName("MaskedDistance");
+    colors->SetNumberOfComponents(4);
+    colors->SetNumberOfTuples(
+        static_cast<vtkIdType>(scan->distanceToRef.size()));
+
+    for (std::size_t i = 0; i < scan->distanceToRef.size(); ++i) {
+        vtkIdType idx = static_cast<vtkIdType>(i);
+        if (toothMask[i]) {
+            double rgb[3];
+            lut->GetColor(scan->distanceToRef[i], rgb);
+            colors->SetTuple4(idx,
+                static_cast<unsigned char>(rgb[0] * 255.0 + 0.5),
+                static_cast<unsigned char>(rgb[1] * 255.0 + 0.5),
+                static_cast<unsigned char>(rgb[2] * 255.0 + 0.5),
+                255);
+        } else {
+            colors->SetTuple4(idx, 55, 55, 55, 255);
+        }
+    }
+
+    m_polyData->GetPointData()->SetScalars(colors);
+    m_mapper->SetColorModeToDirectScalars();
+    m_mapper->ScalarVisibilityOn();
+
+    // Colour bar still represents the LUT range (tooth area only).
+    m_colorBar->SetLookupTable(lut);
+    m_colorBar->SetTitle("mm");
+    m_colorBar->VisibilityOn();
+
+    m_renderWindow->Render();
+}
+
 void VTKMeshWidget::showPhongShading()
 {
     m_mapper->ScalarVisibilityOff();

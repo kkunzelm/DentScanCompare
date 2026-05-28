@@ -32,6 +32,12 @@ public:
     void setMesh(const std::shared_ptr<ScanData>& scan);
     void showDistanceMap(const std::shared_ptr<ScanData>& scan,
                          double rangeMin = -1.0, double rangeMax = 1.0);
+
+    // Same as above but greys out vertices not in toothMask so the colour
+    // map focuses on the tooth crown area only.
+    void showDistanceMap(const std::shared_ptr<ScanData>& scan,
+                         double rangeMin, double rangeMax,
+                         const std::vector<bool>& toothMask);
     void showPhongShading();
     void setColorBarVisible(bool visible);
     vtkRenderer* renderer() const { return m_renderer; }

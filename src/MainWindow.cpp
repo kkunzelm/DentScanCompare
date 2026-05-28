@@ -817,10 +817,27 @@ void MainWindow::updateDistanceMapsTab()
         m_distWidgets.push_back(w);
     }
 
+    // Build per-scan tooth masks when seeds are placed, so the distance maps
+    // grey out gingival tissue and focus colour on the crown area.
+    const bool haveMask = !m_pickedPts.empty();
+    ToothSegmentation::Params segParams;
+    if (haveMask) {
+        if (m_segGeodesicSpin) segParams.maxGeodesicMm     = m_segGeodesicSpin->value();
+        if (m_segCreaseSpin)   segParams.maxCreaseAngleDeg = m_segCreaseSpin->value();
+        if (m_segCurvSpin)     segParams.minMeanCurvature  = m_segCurvSpin->value();
+    }
+
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
         m_distWidgets[i]->setMesh(m_scans[i]);
-        if (m_scans[i]->distanceComputed)
+        if (!m_scans[i]->distanceComputed) continue;
+
+        if (haveMask) {
+            auto mask = ToothSegmentation::segmentFromPoints(
+                *m_scans[i], m_pickedPts, segParams);
+            m_distWidgets[i]->showDistanceMap(m_scans[i], -maxDist, maxDist, mask);
+        } else {
             m_distWidgets[i]->showDistanceMap(m_scans[i], -maxDist, maxDist);
+        }
     }
 }
 
@@ -890,6 +907,9 @@ void MainWindow::runSegmentation()
 
         // Disable the Z-window spinbox — the tooth mask takes priority
         if (m_zWindowSpin) m_zWindowSpin->setEnabled(false);
+
+        // Refresh distance maps so they immediately reflect the new mask
+        updateDistanceMapsTab();
     } else {
         if (m_segStatusLabel)
             m_segStatusLabel->setText(
