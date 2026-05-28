@@ -59,6 +59,8 @@ std::shared_ptr<ScanData> read(const std::string& filePath, std::string& errorMs
     points.reserve(nTriangles * 3);
     faces.reserve(nTriangles);
 
+    std::size_t nCorrected = 0;
+
     for (uint32_t i = 0; i < nTriangles; ++i) {
         float buf[12]; // 3 floats normal + 9 floats vertices
         file.read(reinterpret_cast<char*>(buf), 48);
@@ -68,13 +70,41 @@ std::shared_ptr<ScanData> read(const std::string& filePath, std::string& errorMs
             errorMsg = "Unexpected end of file at triangle " + std::to_string(i);
             return nullptr;
         }
-        // buf[0..2] = normal (ignored, recomputed by CGAL)
+
+        // Use the STL-stored face normal to verify winding order.
+        // Some scanners (e.g. Primescan) export triangles wound in the opposite
+        // direction from others.  We fix this per-face so orient_polygon_soup
+        // starts from a consistently outward-facing soup.
+        const float nx = buf[0], ny = buf[1], nz = buf[2];
+        const float v0x=buf[3],  v0y=buf[4],  v0z=buf[5];
+        const float v1x=buf[6],  v1y=buf[7],  v1z=buf[8];
+        const float v2x=buf[9],  v2y=buf[10], v2z=buf[11];
+
         std::size_t base = points.size();
-        points.emplace_back(buf[3],  buf[4],  buf[5]);
-        points.emplace_back(buf[6],  buf[7],  buf[8]);
-        points.emplace_back(buf[9],  buf[10], buf[11]);
-        faces.push_back({base, base + 1, base + 2});
+        points.emplace_back(v0x, v0y, v0z);
+        points.emplace_back(v1x, v1y, v1z);
+        points.emplace_back(v2x, v2y, v2z);
+
+        // Cross product of edges: (v1-v0) × (v2-v0)
+        const float ex1 = v1x-v0x, ey1 = v1y-v0y, ez1 = v1z-v0z;
+        const float ex2 = v2x-v0x, ey2 = v2y-v0y, ez2 = v2z-v0z;
+        const float cx = ey1*ez2 - ez1*ey2;
+        const float cy = ez1*ex2 - ex1*ez2;
+        const float cz = ex1*ey2 - ey1*ex2;
+
+        // Only correct when the stored normal is non-degenerate and anti-aligned.
+        const float nMagSq = nx*nx + ny*ny + nz*nz;
+        if (nMagSq > 1e-8f && (cx*nx + cy*ny + cz*nz) < 0.0f) {
+            faces.push_back({base, base + 2, base + 1}); // swap v1 ↔ v2
+            ++nCorrected;
+        } else {
+            faces.push_back({base, base + 1, base + 2});
+        }
     }
+
+    // If the majority of faces needed correction the entire mesh was inverted —
+    // normal for some exporters, handled generically above.
+    (void)nCorrected;
 
     // --- repair and orient the polygon soup ---
     namespace PMP = CGAL::Polygon_mesh_processing;

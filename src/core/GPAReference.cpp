@@ -1,10 +1,15 @@
 #include "GPAReference.h"
 
+#include <CGAL/AABB_tree.h>
+#include <CGAL/AABB_traits_3.h>
+#include <CGAL/AABB_face_graph_triangle_primitive.h>
+
 #include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numbers>
 
 namespace GPAReference {
@@ -127,6 +132,42 @@ void resolveZRotation(ScanData& scan, const ScanData& ref)
     }
 }
 
+// ─── True mean-mesh update ───────────────────────────────────────────────────
+// After GPA convergence the reference is still one scanner's mesh (the one
+// with the most triangles).  Updating each reference vertex to the centroid of
+// its nearest points on ALL aligned scans produces a neutral mean surface so
+// that every scanner — including the original reference — shows a non-zero
+// distance to it.
+void updateToMeanMesh(ScanData& gpaRef,
+                      const std::vector<std::shared_ptr<ScanData>>& scans)
+{
+    using Primitive  = CGAL::AABB_face_graph_triangle_primitive<SurfaceMesh>;
+    using AABBTraits = CGAL::AABB_traits_3<Kernel, Primitive>;
+    using AABBTree   = CGAL::AABB_tree<AABBTraits>;
+
+    std::vector<std::unique_ptr<AABBTree>> trees;
+    trees.reserve(scans.size());
+    for (const auto& s : scans) {
+        auto t = std::make_unique<AABBTree>(
+            faces(s->mesh).first, faces(s->mesh).second, s->mesh);
+        t->accelerate_distance_queries();
+        trees.push_back(std::move(t));
+    }
+
+    const double invN = 1.0 / static_cast<double>(trees.size());
+    for (auto v : gpaRef.mesh.vertices()) {
+        const Point3& p = gpaRef.mesh.point(v);
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        for (const auto& tree : trees) {
+            Point3 cp = tree->closest_point(p);
+            sx += CGAL::to_double(cp.x());
+            sy += CGAL::to_double(cp.y());
+            sz += CGAL::to_double(cp.z());
+        }
+        gpaRef.mesh.point(v) = Point3(sx * invN, sy * invN, sz * invN);
+    }
+}
+
 } // namespace
 
 // ─── Main GPA entry point ────────────────────────────────────────────────────
@@ -190,6 +231,10 @@ std::shared_ptr<ScanData> compute(
 
         if (maxDisp < params.convergenceThresh) break;
     }
+
+    // Update reference to the true mean of all aligned scans so that every
+    // scanner — including the original reference — shows a non-zero distance.
+    updateToMeanMesh(*gpaRef, scans);
 
     return gpaRef;
 }
