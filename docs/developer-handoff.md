@@ -54,6 +54,7 @@ src/
 │   ├── ICPRegistration.{h,cpp}     Point-to-plane ICP (nanoflann + Eigen SVD)
 │   ├── GPAReference.{h,cpp}        GPA: PCA → 4-orient test → ICP → mean mesh
 │   ├── DistanceField.{h,cpp}       CGAL AABB-tree → per-vertex signed distances
+│   ├── ToothSegmentation.{h,cpp}   Dijkstra crown segmentation (geodesic + CEJ guard)
 │   └── ArchMetrics.{h,cpp}         Open boundary, hole count, stitching angles
 └── visualization/
     ├── VTKMeshWidget.{h,cpp}        QVTKOpenGLNativeWidget + vtkPolyData pipeline
@@ -98,14 +99,30 @@ export/
 
 5. **DistanceField** – CGAL AABB tree on the GPA mean reference.  Per vertex of each scan:
    closest point + primitive, signed by dot(diff, face_normal).
-   `fillReport(scan, report, coverageThreshold=0.2, zWindowMm=0.0)`:
-   when `zWindowMm > 0`, only vertices within that many mm below the scan's maximum
-   Z (cusp tips after PCA) contribute to the statistics.  This restricts metrics to
-   the occlusal crown zone and excludes gingival tissue and scan-margin outliers.
-   Recommended: 12 mm.  Default 0 = use all vertices (legacy behaviour).
-   Exposed in the UI as the "Occlusal zone" spinbox in the Registration tab.
+   `fillReport(scan, report, coverageThreshold, zWindowMm, plane, toothMask)`:
+   Filter priority (highest wins):
+   - `toothMask` non-empty → use only vertices where `toothMask[v.idx()]` is true.
+   - `plane.active` → restrict to slab `[-belowMm, +aboveMm]` around fitted occlusal plane.
+   - `zWindowMm > 0` → simple global Z-window (legacy; still useful as fallback).
+   - Otherwise: all vertices.
 
-6. **ArchMetrics** – Open boundary edge sum, Euler-characteristic hole count,
+6. **ToothSegmentation** – Multi-source Dijkstra on the face adjacency graph.
+   Given one seed per tooth crown (clicked on the occlusal/incisal surface), expands
+   outward face-by-face using centroid-to-centroid distance as edge cost.
+   Stopping criteria (all must pass to expand into a neighbour):
+   - **Primary**: accumulated geodesic distance ≤ `maxGeodesicMm` (default 12 mm).
+     A full clinical crown is ≤ 12 mm surface-path from the cusp tip for every tooth
+     type: molars 8–12 mm, premolars 7–10 mm, canines 9–12 mm, incisors 10–13 mm.
+     Completely orientation-independent (replaces the old normal-tilt-from-Z BFS which
+     failed incisor palatal/lingual surfaces at 110–120° from +Z).
+   - **Secondary – crease angle**: normal dot-product between adjacent faces must be
+     above `cos(maxCreaseAngleDeg)` (default 50°).  The CEJ always creates a kink.
+   - **Secondary – curvature floor**: face mean κ_H must be > `minMeanCurvature`
+     (default -4 mm⁻¹).  The gingival sulcus is concave.
+   Returns `std::vector<bool>` per vertex (true = tooth crown).
+   Stored in `MainWindow::m_toothMask`; recomputed whenever operator adds seed points.
+
+7. **ArchMetrics** – Open boundary edge sum, Euler-characteristic hole count,
    stitching artifact angle via adjacent half-edge normals.
 
 ---
@@ -185,20 +202,38 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
   boundary and stitching metrics.
 - Tab 6 Export buttons are all wired to the same `showExportDialog()` slot instead of
   individual actions per export type.
-- The Registration tab's method combo and ICP parameter spinboxes do not feed back into
-  `runAnalysis()` – they are UI placeholders.
 - The GPA mean-mesh update adds ~30 s for large scans (696 k triangles × 5 AABB queries).
   Could be parallelised with `QtConcurrent::map`.
 - CSV export uses UTF-8 BOM for Windows compatibility; column headers contain Unicode
   (κ, °, ²) – these render correctly on Windows with BOM.
-- The occlusal-zone restriction uses a simple global Z-maximum for the window anchor.
-  A more robust approach would use per-tooth cusp detection (local maxima of Z with
-  high |κ_H|) to anchor the window per tooth, handling cases where the arch is not
-  perfectly PCA-aligned in Z.
+- Tooth segmentation seed points must be placed manually once per session; they are not
+  persisted across restarts.  Automatic seed detection (local Z/κ_H maxima per tooth) would
+  eliminate the manual step.
 
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-28 – Dijkstra tooth-crown segmentation + occlusal-plane UI
+
+- `ToothSegmentation` rewritten: BFS + `maxNormalTiltDeg` criterion replaced by
+  multi-source Dijkstra with geodesic distance as the primary stopping criterion.
+  Reason: the old 75° normal-tilt test correctly includes incisor labial surfaces
+  (~65° from +Z) but fails the palatal/lingual surface (110–120° from +Z), leaving
+  anterior crowns half-segmented.  Geodesic distance ≤ 12 mm covers every tooth type
+  regardless of orientation.  CEJ kink guard (50°) and curvature floor (−4 mm⁻¹) kept
+  as secondary criteria.
+- `DistanceField::fillReport`: new signature adds `OcclusalPlane plane` and
+  `std::vector<bool> toothMask` parameters with priority-ranked filtering.
+- `MainWindow`: Registration tab gains interactive occlusal-plane fitting.
+  Operator clicks ≥ 3 points on the mesh surface; least-squares plane is fitted via PCA
+  of the covariance matrix (smallest eigenvector = normal).  Asymmetric above/below
+  spinboxes (default +2/−12 mm) define the slab.  Plane + slab rendered as three
+  oriented disks (grey/green/cyan) in the Registration viewport.
+  Simultaneously, clicked points become seeds for `ToothSegmentation::segmentFromPoints`;
+  the resulting mask overrides the plane-slab filter in `fillReport` (highest priority).
+  Registration tab also gains: method combo (GPA mean vs. fixed scanner), ICP iterations
+  spinbox, sample-count spinbox — all wired into `runAnalysis()`.
 
 ### 2026-05-28 – Occlusal-zone restriction + documentation
 - `DistanceField::fillReport`: added `zWindowMm` parameter; when > 0, only vertices
