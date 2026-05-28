@@ -132,24 +132,17 @@ void MetricsTableWidget::highlightBestWorst()
     }
 }
 
-void MetricsTableWidget::exportCSV()
+bool MetricsTableWidget::exportToFile(const QString& path)
 {
-    QString path = QFileDialog::getSaveFileName(
-        this, "Export Metrics", "DentScanCompare_metrics.csv",
-        "CSV files (*.csv)");
-    if (path.isEmpty()) return;
-
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
     QTextStream out(&file);
-    out.setGenerateByteOrderMark(true); // UTF-8 BOM – makes Excel on Windows read special chars correctly
-    // header
+    out.setGenerateByteOrderMark(true);
     for (int c = 0; c < m_table->columnCount(); ++c) {
         out << m_table->horizontalHeaderItem(c)->text();
         out << (c < m_table->columnCount() - 1 ? "," : "\n");
     }
-    // data
     for (int r = 0; r < m_table->rowCount(); ++r) {
         for (int c = 0; c < m_table->columnCount(); ++c) {
             auto* item = m_table->item(r, c);
@@ -157,4 +150,14 @@ void MetricsTableWidget::exportCSV()
             out << (c < m_table->columnCount() - 1 ? "," : "\n");
         }
     }
+    return true;
+}
+
+void MetricsTableWidget::exportCSV()
+{
+    QString path = QFileDialog::getSaveFileName(
+        this, "Export Metrics", "DentScanCompare_metrics.csv",
+        "CSV files (*.csv)");
+    if (path.isEmpty()) return;
+    exportToFile(path);
 }

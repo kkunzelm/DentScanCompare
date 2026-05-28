@@ -427,10 +427,11 @@ void MainWindow::onAnalysisFinished()
     m_progress->hide();
     setStatus("Analysis complete.");
 
-    // Switch to Fingerprint tab BEFORE updating it so the widget
-    // is visible when QPainter redraws it.
+    // Switch to Fingerprint tab BEFORE updating so the widget is visible
+    // when QPainter first redraws it.
     m_tabs->setCurrentIndex(1);
 
+    updateOverviewTab();      // re-render with post-registration mesh positions
     updateFingerprintTab();
     updateRegistrationTab();
     updateDistanceMapsTab();
@@ -455,6 +456,10 @@ void MainWindow::showExportDialog()
         auto* rw = m_distWidgets[i]->renderer()->GetRenderWindow();
         if (rw) ReportExporter::toPNG(rw, fn, 2);
     }
+
+    // Export metrics CSV
+    if (m_metricsTable)
+        m_metricsTable->exportToFile(dir + "/DentScanCompare_metrics.csv");
 
     QMessageBox::information(this, "Export done",
         "Files saved to:\n" + dir);

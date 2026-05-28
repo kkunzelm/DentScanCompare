@@ -20,6 +20,9 @@ public:
     void setReports(const std::vector<MetricReport>& reports);
     void clear();
 
+    // Write CSV to a specific path without showing a file dialog.
+    bool exportToFile(const QString& path);
+
 private slots:
     void exportCSV();
 

@@ -4,21 +4,25 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
+#include <limits>
+#include <numbers>
 
 namespace GPAReference {
 
 namespace {
 
-// Centre the mesh at its centroid and optionally align PCA axes.
-// Returns the 4×4 transform that was applied (so the caller can accumulate it).
+// ─── PCA coarse alignment ────────────────────────────────────────────────────
+// Translates each scan to its centroid and rotates so that:
+//   largest-variance axis  → X (left–right of arch)
+//   middle-variance axis   → Y (front–back)
+//   smallest-variance axis → Z (≈ occlusal normal)
+// Z-sign is resolved with curvature: high-curvature side (teeth) → +Z.
 Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
 {
     const auto& mesh = scan.mesh;
     std::size_t n = mesh.num_vertices();
     if (n == 0) return Eigen::Matrix4d::Identity();
 
-    // --- centroid ---
     Eigen::Vector3d mu = Eigen::Vector3d::Zero();
     for (auto v : mesh.vertices()) {
         const Point3& p = mesh.point(v);
@@ -26,7 +30,6 @@ Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
     }
     mu /= static_cast<double>(n);
 
-    // --- covariance matrix ---
     Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
     for (auto v : mesh.vertices()) {
         const Point3& p = mesh.point(v);
@@ -35,21 +38,20 @@ Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
     }
     cov /= static_cast<double>(n);
 
-    // Eigenvalues sorted ascending; col(2) = largest variance direction.
+    // Eigenvalues sorted ascending; col(2) = largest variance.
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(cov);
     Eigen::Matrix3d R;
-    R.col(0) = eig.eigenvectors().col(2); // largest  → X (left–right)
-    R.col(1) = eig.eigenvectors().col(1); // medium   → Y (front–back)
-    R.col(2) = eig.eigenvectors().col(0); // smallest → Z (≈ occlusal normal)
-    if (R.determinant() < 0) R.col(0) = -R.col(0);
+    R.col(0) = eig.eigenvectors().col(2); // largest  → X
+    R.col(1) = eig.eigenvectors().col(1); // medium   → Y
+    R.col(2) = eig.eigenvectors().col(0); // smallest → Z (occlusal normal)
+    if (R.determinant() < 0) R.col(0) = -R.col(0); // ensure right-handed
 
-    // --- resolve Z-sign: occlusal (high curvature) should be at +Z ---
+    // Resolve Z-sign: occlusal surface (teeth = high curvature) → +Z.
     auto meanMapOpt = mesh.property_map<VertexDesc, double>("v:mean_curv");
     if (meanMapOpt.has_value()) {
         const auto& mm = meanMapOpt.value();
         const Eigen::Vector3d& zAx = R.col(2);
 
-        // median curvature as threshold
         std::vector<double> kv;
         kv.reserve(n);
         for (auto v : mesh.vertices())
@@ -58,35 +60,76 @@ Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
         double kMed = kv[n/2];
 
         double sumHighZ = 0.0, sumLowZ = 0.0;
-        int nHigh = 0, nLow = 0;
+        int    nHigh = 0,    nLow = 0;
         for (auto v : mesh.vertices()) {
             const Point3& p = mesh.point(v);
-            Eigen::Vector3d d(p.x()-mu[0], p.y()-mu[1], p.z()-mu[2]);
-            double z = zAx.dot(d);
+            double z = zAx.dot(Eigen::Vector3d(p.x()-mu[0], p.y()-mu[1], p.z()-mu[2]));
             if (std::abs(get(mm, v)) >= kMed) { sumHighZ += z; ++nHigh; }
             else                               { sumLowZ  += z; ++nLow;  }
         }
-        double meanHighZ = (nHigh > 0) ? sumHighZ / nHigh : 0.0;
-        double meanLowZ  = (nLow  > 0) ? sumLowZ  / nLow  : 0.0;
-
-        // If high-curvature (teeth) is on the -Z side, flip Z and Y to keep right-handed.
-        if (meanHighZ < meanLowZ) {
+        if (nHigh > 0 && nLow > 0 &&
+            sumHighZ / nHigh < sumLowZ / nLow) {
+            // High-curvature (teeth) is at -Z → flip Z and Y to stay right-handed.
             R.col(2) = -R.col(2);
             R.col(1) = -R.col(1);
         }
     }
 
-    // Transform: T(x) = R^T * (x - mu)
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
     T.block<3,3>(0,0) = R.transpose();
     T.block<3,1>(0,3) = -(R.transpose() * mu);
-
     ICPRegistration::applyTransform(scan, T);
     return T;
 }
 
+// ─── Z-rotation disambiguation ───────────────────────────────────────────────
+// After PCA the remaining ambiguity is the sign of the X-axis, which is
+// equivalent to a 0° or 180° rotation around Z.  We also test 90° and 270°
+// as a safety net for unusual scanner coordinate systems.
+// Each candidate orientation is evaluated with a very quick ICP run
+// (few iterations, large radius).  The best wins.
+void resolveZRotation(ScanData& scan, const ScanData& ref)
+{
+    ICPRegistration::Params evalP;
+    evalP.sampleCount    = 3000;
+    evalP.maxCorrespDist = 20.0;
+    evalP.maxIterations  = 8;
+    evalP.convergenceRms = 1.0;
+
+    double bestRms = std::numeric_limits<double>::infinity();
+    int    bestIdx = 0;
+
+    for (int qi = 0; qi < 4; ++qi) {
+        double a = qi * std::numbers::pi / 2.0;
+        Eigen::Matrix4d Rz = Eigen::Matrix4d::Identity();
+        Rz(0,0) =  std::cos(a); Rz(0,1) = -std::sin(a);
+        Rz(1,0) =  std::sin(a); Rz(1,1) =  std::cos(a);
+
+        // Temporary deep copy to try this orientation without mutating scan.
+        ScanData trial;
+        trial.mesh      = scan.mesh;
+        trial.transform = scan.transform;
+        ICPRegistration::applyTransform(trial, Rz);
+
+        auto r = ICPRegistration::align(trial, ref, evalP);
+        if (r.finalRms < bestRms) {
+            bestRms = r.finalRms;
+            bestIdx = qi;
+        }
+    }
+
+    if (bestIdx != 0) {
+        double a = bestIdx * std::numbers::pi / 2.0;
+        Eigen::Matrix4d Rz = Eigen::Matrix4d::Identity();
+        Rz(0,0) =  std::cos(a); Rz(0,1) = -std::sin(a);
+        Rz(1,0) =  std::sin(a); Rz(1,1) =  std::cos(a);
+        ICPRegistration::applyTransform(scan, Rz);
+    }
+}
+
 } // namespace
 
+// ─── Main GPA entry point ────────────────────────────────────────────────────
 std::shared_ptr<ScanData> compute(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const Params& params,
@@ -94,12 +137,12 @@ std::shared_ptr<ScanData> compute(
 {
     if (scans.empty()) return nullptr;
 
-    // --- Step 0: PCA coarse alignment (handles large translational +
-    //     moderate rotational offsets between scanner coordinate systems) ---
+    // Step 1: PCA coarse alignment (handles large translational + moderate
+    //         rotational offsets between scanner coordinate systems).
     for (auto& scan : scans)
         pcaCoarseAlign(*scan);
 
-    // --- Initial reference: deepcopy of the scan with most triangles ---
+    // Initial reference: deepcopy of the scan with the most triangles.
     auto refIt = std::max_element(scans.begin(), scans.end(),
         [](const auto& a, const auto& b){
             return a->triangleCount < b->triangleCount; });
@@ -108,23 +151,29 @@ std::shared_ptr<ScanData> compute(
     gpaRef->scannerName   = "GPA_Reference";
     gpaRef->triangleCount = gpaRef->mesh.number_of_faces();
 
-    // --- GPA iterations ---
-    // Use multi-pass ICP per scan: coarse (large radius) then fine (tight radius).
+    // Step 2: Resolve the 180° / 90° Z-rotation ambiguity that PCA leaves.
+    //         Compares 4 orientations via a quick ICP evaluation.
+    for (auto& scan : scans) {
+        if (scan.get() == refIt->get()) continue; // reference is already correct
+        resolveZRotation(*scan, *gpaRef);
+    }
+
+    // Step 3: GPA iterations with multi-pass ICP (coarse → fine).
     ICPRegistration::Params fineP = params.icpParams;
 
     ICPRegistration::Params coarseP = fineP;
-    coarseP.maxCorrespDist = 25.0; // [mm] – bridges residual offset after PCA
-    coarseP.maxIterations  = 40;
-    coarseP.convergenceRms = 0.1;
+    coarseP.maxCorrespDist = 15.0;
+    coarseP.maxIterations  = 30;
+    coarseP.convergenceRms = 0.05;
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
         double maxDisp = 0.0;
 
         for (std::size_t si = 0; si < scans.size(); ++si) {
             auto& scan = scans[si];
-            if (scan.get() == gpaRef.get()) continue;
+            if (scan.get() == refIt->get()) continue;
 
-            // Coarse pass – needed mainly in cycle 0 for misaligned scans.
+            // Coarse pass in the first cycle only.
             if (cycle == 0) {
                 auto r0 = ICPRegistration::align(*scan, *gpaRef, coarseP);
                 ICPRegistration::applyTransform(*scan, r0.transform);
