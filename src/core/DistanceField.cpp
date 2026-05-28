@@ -56,12 +56,31 @@ void compute(ScanData& scan, const ScanData& reference)
 }
 
 void fillReport(const ScanData& scan, MetricReport& report,
-                double coverageThreshold)
+                double coverageThreshold, double zWindowMm)
 {
     if (!scan.distanceComputed || scan.distanceToRef.empty()) return;
 
-    const auto& d = scan.distanceToRef;
-    std::size_t n = d.size();
+    // Optionally restrict to occlusal zone: find Z_max then keep only
+    // vertices within zWindowMm below it (tooth crowns, not gingiva).
+    double zThresh = -std::numeric_limits<double>::infinity();
+    if (zWindowMm > 0.0) {
+        double zMax = -std::numeric_limits<double>::infinity();
+        for (auto v : scan.mesh.vertices())
+            zMax = std::max(zMax, CGAL::to_double(scan.mesh.point(v).z()));
+        zThresh = zMax - zWindowMm;
+    }
+
+    std::vector<double> d;
+    d.reserve(scan.distanceToRef.size());
+    for (auto v : scan.mesh.vertices()) {
+        if (zWindowMm > 0.0 &&
+            CGAL::to_double(scan.mesh.point(v).z()) < zThresh)
+            continue;
+        d.push_back(scan.distanceToRef[v.idx()]);
+    }
+    if (d.empty()) return;
+
+    const std::size_t n = d.size();
 
     // RMS
     double rms2 = 0.0;

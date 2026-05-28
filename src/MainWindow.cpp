@@ -209,6 +209,21 @@ void MainWindow::setupTab3Registration()
     sampleSpin->setValue(20000);
     ctrlLayout->addRow("ICP sample pts:", sampleSpin);
 
+    // Occlusal zone restriction
+    m_zWindowSpin = new QDoubleSpinBox(ctrlPanel);
+    m_zWindowSpin->setRange(0.0, 30.0);
+    m_zWindowSpin->setSingleStep(1.0);
+    m_zWindowSpin->setValue(0.0);
+    m_zWindowSpin->setDecimals(1);
+    m_zWindowSpin->setSuffix(" mm");
+    m_zWindowSpin->setSpecialValueText("All (gingiva incl.)");
+    m_zWindowSpin->setToolTip(
+        "Restrict distance metrics to the top N mm of the aligned scan.\n"
+        "After PCA, Z+ points toward the occlusal surface; this window\n"
+        "captures tooth crowns and excludes gingiva.\n"
+        "Recommended: 12 mm.  0 = use all vertices.");
+    ctrlLayout->addRow("Occlusal zone:", m_zWindowSpin);
+
     auto* runBtn = new QPushButton("Run Registration", ctrlPanel);
     connect(runBtn, &QPushButton::clicked, this, &MainWindow::runAnalysis);
     ctrlLayout->addRow(runBtn);
@@ -401,10 +416,11 @@ void MainWindow::runAnalysis()
         // Step 4: distance fields
         QMetaObject::invokeMethod(this, [this](){
             setStatus("Computing distance fields…"); m_progress->setValue(70); }, Qt::QueuedConnection);
+        const double zWindow = m_zWindowSpin ? m_zWindowSpin->value() : 0.0;
         if (m_gpaReference) {
             for (std::size_t i = 0; i < m_scans.size(); ++i) {
                 DistanceField::compute(*m_scans[i], *m_gpaReference);
-                DistanceField::fillReport(*m_scans[i], m_reports[i]);
+                DistanceField::fillReport(*m_scans[i], m_reports[i], 0.2, zWindow);
             }
         }
 
@@ -522,8 +538,13 @@ void MainWindow::updateRegistrationTab()
         m_overlayWidget->setOverlayMeshes(m_scans);
 
     if (m_gpaReference && !m_reports.empty()) {
-        QString s = QString("GPA complete. Reference: %1 triangles.\n\n")
-                        .arg(m_gpaReference->triangleCount);
+        double zw = m_zWindowSpin ? m_zWindowSpin->value() : 0.0;
+        QString zoneStr = (zw > 0.0)
+            ? QString("Occlusal zone: top %1 mm").arg(zw, 0, 'f', 0)
+            : "Zone: full scan (gingiva included)";
+        QString s = QString("GPA complete. Reference: %1 triangles.\n%2\n\n")
+                        .arg(m_gpaReference->triangleCount)
+                        .arg(zoneStr);
         for (const auto& r : m_reports) {
             if (!std::isnan(r.rmsDistance))
                 s += QString("%1: RMS = %2 mm\n")

@@ -7,6 +7,7 @@
 #include <QListWidget>
 #include <QProgressBar>
 #include <QLabel>
+#include <QDoubleSpinBox>
 #include <QFutureWatcher>
 #include <memory>
 #include <vector>
@@ -69,9 +70,10 @@ private:
     QLabel*            m_atiLabel    = nullptr;
 
     // ---- Tab 3: Registration ----
-    QWidget*       m_tab3         = nullptr;
-    VTKMeshWidget* m_overlayWidget = nullptr;
-    QLabel*        m_registrationStatus = nullptr;
+    QWidget*        m_tab3               = nullptr;
+    VTKMeshWidget*  m_overlayWidget      = nullptr;
+    QLabel*         m_registrationStatus = nullptr;
+    QDoubleSpinBox* m_zWindowSpin        = nullptr;  // occlusal zone [mm], 0=all
 
     // ---- Tab 4: Distance Maps ----
     QWidget*                    m_tab4       = nullptr;

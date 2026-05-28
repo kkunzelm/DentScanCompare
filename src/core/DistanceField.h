@@ -13,7 +13,12 @@ namespace DistanceField {
 void compute(ScanData& scan, const ScanData& reference);
 
 // Fills the local-accuracy section of report from scan->distanceToRef.
+// coverageThreshold: vertex counts as "covered" when |d| <= this [mm].
+// zWindowMm: if > 0, only vertices within zWindowMm below the scan's
+//   maximum Z (occlusal tip) are included — restricts metrics to the tooth
+//   crown zone, excluding gingiva.  0 = use all vertices.
 void fillReport(const ScanData& scan, MetricReport& report,
-                double coverageThreshold = 0.2);  // [mm]
+                double coverageThreshold = 0.2,
+                double zWindowMm = 0.0);
 
 } // namespace DistanceField
