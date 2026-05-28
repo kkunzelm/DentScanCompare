@@ -34,6 +34,7 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
+#include <Eigen/Eigenvalues>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -233,9 +234,69 @@ void MainWindow::setupTab3Registration()
         "Recommended: 12 mm.  0 = use all vertices.");
     ctrlLayout->addRow("Occlusal zone:", m_zWindowSpin);
 
-    auto* runBtn = new QPushButton("Run Registration", ctrlPanel);
+    auto* runBtn = new QPushButton("▶  Run Registration", ctrlPanel);
     connect(runBtn, &QPushButton::clicked, this, &MainWindow::runAnalysis);
     ctrlLayout->addRow(runBtn);
+
+    // ── Occlusal-plane picking ────────────────────────────────────────────
+    auto* sepLine = new QFrame(ctrlPanel);
+    sepLine->setFrameShape(QFrame::HLine);
+    sepLine->setFrameShadow(QFrame::Sunken);
+    ctrlLayout->addRow(sepLine);
+
+    auto* occlLabel = new QLabel("<b>Occlusal Plane</b>", ctrlPanel);
+    occlLabel->setToolTip(
+        "Pick ≥ 3 cusp tips on the overlay to fit a plane.\n"
+        "Metrics are then restricted to the zone between\n"
+        "the two offset planes (green = above, cyan = below).");
+    ctrlLayout->addRow(occlLabel);
+
+    m_pickBtn = new QPushButton("📍 Pick Cusp Points", ctrlPanel);
+    m_pickBtn->setCheckable(true);
+    m_pickBtn->setToolTip("Activate: left-click cusp tips in the overlay.\nDeactivate to stop picking.");
+    ctrlLayout->addRow(m_pickBtn);
+
+    m_pickCountLabel = new QLabel("0 points picked", ctrlPanel);
+    m_pickCountLabel->setStyleSheet("color:#444; font-size:10px;");
+    ctrlLayout->addRow(m_pickCountLabel);
+
+    m_clearPickBtn = new QPushButton("Clear Points", ctrlPanel);
+    ctrlLayout->addRow(m_clearPickBtn);
+
+    m_planeAboveSpin = new QDoubleSpinBox(ctrlPanel);
+    m_planeAboveSpin->setRange(0.0, 10.0);
+    m_planeAboveSpin->setSingleStep(0.5);
+    m_planeAboveSpin->setValue(2.0);
+    m_planeAboveSpin->setSuffix(" mm");
+    m_planeAboveSpin->setToolTip("Include surface up to this far above the fitted plane.");
+    ctrlLayout->addRow("Above plane:", m_planeAboveSpin);
+
+    m_planeBelowSpin = new QDoubleSpinBox(ctrlPanel);
+    m_planeBelowSpin->setRange(0.0, 20.0);
+    m_planeBelowSpin->setSingleStep(0.5);
+    m_planeBelowSpin->setValue(12.0);
+    m_planeBelowSpin->setSuffix(" mm");
+    m_planeBelowSpin->setToolTip("Include surface up to this far below the fitted plane (crown height).");
+    ctrlLayout->addRow("Below plane:", m_planeBelowSpin);
+
+    m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", ctrlPanel);
+    m_recomputeBtn->setToolTip("Re-run distance statistics with the current plane / zone settings.\nDoes NOT re-run ICP (fast).");
+    m_recomputeBtn->setEnabled(false);
+    ctrlLayout->addRow(m_recomputeBtn);
+
+    // ── wire picking signals ──────────────────────────────────────────────
+    connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_overlayWidget) m_overlayWidget->setPickMode(on);
+        m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Cusp Points");
+    });
+    connect(m_clearPickBtn, &QPushButton::clicked,
+            this, &MainWindow::clearPickedPoints);
+    connect(m_recomputeBtn, &QPushButton::clicked,
+            this, &MainWindow::recomputeMetrics);
+    connect(m_planeAboveSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double){ updatePlaneVisualization(); });
+    connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double){ updatePlaneVisualization(); });
 
     m_registrationStatus = new QLabel("Not yet run.", ctrlPanel);
     m_registrationStatus->setWordWrap(true);
@@ -245,7 +306,9 @@ void MainWindow::setupTab3Registration()
 
     // right: overlay view
     m_overlayWidget = new VTKMeshWidget(m_tab3);
-    m_overlayWidget->setTitle("Overlay (all registered scans)");
+    m_overlayWidget->setTitle("Overlay – click 'Pick Cusp Points' then left-click cusp tips");
+    connect(m_overlayWidget, &VTKMeshWidget::pointPicked,
+            this, &MainWindow::onPointPicked);
     hlay->addWidget(m_overlayWidget, 1);
 
     m_tabs->addTab(m_tab3, "Registration");
@@ -633,4 +696,111 @@ void MainWindow::updateMetricsTab()
 void MainWindow::setStatus(const QString& msg)
 {
     m_statusBar->setText(msg);
+}
+
+// ── Occlusal-plane picking ────────────────────────────────────────────────────
+
+void MainWindow::onPointPicked(double x, double y, double z)
+{
+    m_pickedPts.push_back({x, y, z});
+    const int n = static_cast<int>(m_pickedPts.size());
+    m_pickCountLabel->setText(QString("%1 point%2 picked").arg(n).arg(n == 1 ? "" : "s"));
+
+    // Update sphere visualization immediately
+    if (m_overlayWidget)
+        m_overlayWidget->showPickSpheres(m_pickedPts);
+
+    // Fit plane as soon as we have 3+ points and refresh visualization
+    if (n >= 3) {
+        fitOcclusalPlane();
+        updatePlaneVisualization();
+        m_recomputeBtn->setEnabled(true);
+    }
+}
+
+void MainWindow::clearPickedPoints()
+{
+    m_pickedPts.clear();
+    m_occlusalPlane.active = false;
+    m_pickCountLabel->setText("0 points picked");
+    m_recomputeBtn->setEnabled(false);
+    if (m_overlayWidget) m_overlayWidget->clearPickActors();
+}
+
+void MainWindow::fitOcclusalPlane()
+{
+    const int n = static_cast<int>(m_pickedPts.size());
+    if (n < 3) return;
+
+    // Centroid
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    for (const auto& p : m_pickedPts)
+        centroid += Eigen::Vector3d(p[0], p[1], p[2]);
+    centroid /= n;
+
+    // Covariance matrix of picked points
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    for (const auto& p : m_pickedPts) {
+        Eigen::Vector3d d = Eigen::Vector3d(p[0], p[1], p[2]) - centroid;
+        cov += d * d.transpose();
+    }
+
+    // Eigenvector for smallest eigenvalue = plane normal (least-squares fit)
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(cov);
+    Eigen::Vector3d normal = eig.eigenvectors().col(0);
+
+    // Ensure normal points toward +Z (occlusal surface = tooth side after PCA)
+    if (normal.z() < 0.0) normal = -normal;
+    normal.normalize();
+
+    m_occlusalPlane.normal = normal;
+    m_occlusalPlane.origin = centroid;
+    m_occlusalPlane.active = true;
+}
+
+void MainWindow::updatePlaneVisualization()
+{
+    if (!m_overlayWidget || !m_occlusalPlane.active) return;
+
+    const double above = m_planeAboveSpin ? m_planeAboveSpin->value() : 2.0;
+    const double below = m_planeBelowSpin ? m_planeBelowSpin->value() : 12.0;
+
+    // Re-draw spheres first (showOcclusalPlane clears all pick actors)
+    m_overlayWidget->showPickSpheres(m_pickedPts);
+    m_overlayWidget->showOcclusalPlane(m_occlusalPlane.normal,
+                                       m_occlusalPlane.origin,
+                                       above, below);
+}
+
+void MainWindow::recomputeMetrics()
+{
+    if (m_scans.empty() || !m_gpaReference) {
+        setStatus("Run registration first.");
+        return;
+    }
+
+    // Build the plane filter from current UI state
+    DistanceField::OcclusalPlane plane = m_occlusalPlane;
+    if (plane.active) {
+        plane.aboveMm = m_planeAboveSpin ? m_planeAboveSpin->value() : 2.0;
+        plane.belowMm = m_planeBelowSpin ? m_planeBelowSpin->value() : 12.0;
+    }
+    const double zWindow = (!plane.active && m_zWindowSpin)
+                           ? m_zWindowSpin->value() : 0.0;
+
+    setStatus("Recomputing metrics…");
+    for (std::size_t i = 0; i < m_scans.size(); ++i) {
+        // Distance field is already computed; just re-fill the report
+        DistanceField::fillReport(*m_scans[i], m_reports[i], 0.2, zWindow, plane);
+        ArchMetrics::computeBoundaryMetrics(*m_scans[i], m_reports[i]);
+        ArchMetrics::computeStitchingArtifacts(*m_scans[i], m_reports[i]);
+    }
+
+    updateMetricsTab();
+    updateRegistrationTab();
+    updateDistanceMapsTab();
+    setStatus(plane.active
+        ? QString("Metrics updated – occlusal plane (above %1 mm / below %2 mm).")
+              .arg(plane.aboveMm, 0, 'f', 1).arg(plane.belowMm, 0, 'f', 1)
+        : "Metrics updated.");
 }

@@ -2,6 +2,7 @@
 
 #include "core/Mesh.h"
 #include "core/MetricReport.h"
+#include "core/DistanceField.h"
 #include <QMainWindow>
 #include <QTabWidget>
 #include <QListWidget>
@@ -9,8 +10,11 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QFutureWatcher>
+#include <Eigen/Core>
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -46,6 +50,13 @@ private:
     // ---- update helpers ----
     void updateScannerList();
     void updateMethodCombo();   // repopulate method combo from loaded scans
+
+    // ---- occlusal-plane picking ----
+    void onPointPicked(double x, double y, double z);
+    void clearPickedPoints();
+    void fitOcclusalPlane();        // least-squares plane through m_pickedPts
+    void updatePlaneVisualization();
+    void recomputeMetrics();        // re-run distance+arch steps without re-running ICP
     void updateOverviewTab();
     void updateFingerprintTab();
     void updateRegistrationTab();
@@ -76,10 +87,22 @@ private:
     QWidget*        m_tab3               = nullptr;
     VTKMeshWidget*  m_overlayWidget      = nullptr;
     QLabel*         m_registrationStatus = nullptr;
-    QComboBox*      m_methodCombo        = nullptr;  // GPA or fixed-ref scanner
-    QSpinBox*       m_maxIterSpin        = nullptr;  // ICP max iterations
-    QSpinBox*       m_sampleSpin         = nullptr;  // ICP sample points
-    QDoubleSpinBox* m_zWindowSpin        = nullptr;  // occlusal zone [mm], 0=all
+    QComboBox*      m_methodCombo        = nullptr;
+    QSpinBox*       m_maxIterSpin        = nullptr;
+    QSpinBox*       m_sampleSpin         = nullptr;
+    QDoubleSpinBox* m_zWindowSpin        = nullptr;
+
+    // occlusal-plane picking controls
+    QPushButton*    m_pickBtn            = nullptr;
+    QLabel*         m_pickCountLabel     = nullptr;
+    QPushButton*    m_clearPickBtn       = nullptr;
+    QDoubleSpinBox* m_planeAboveSpin     = nullptr;  // zone above fitted plane [mm]
+    QDoubleSpinBox* m_planeBelowSpin     = nullptr;  // zone below fitted plane [mm]
+    QPushButton*    m_recomputeBtn       = nullptr;
+
+    // occlusal-plane state
+    std::vector<std::array<double,3>> m_pickedPts;
+    DistanceField::OcclusalPlane      m_occlusalPlane;
 
     // ---- Tab 4: Distance Maps ----
     QWidget*                    m_tab4       = nullptr;

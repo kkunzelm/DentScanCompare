@@ -56,28 +56,44 @@ void compute(ScanData& scan, const ScanData& reference)
 }
 
 void fillReport(const ScanData& scan, MetricReport& report,
-                double coverageThreshold, double zWindowMm)
+                double coverageThreshold, double zWindowMm,
+                const OcclusalPlane& plane)
 {
     if (!scan.distanceComputed || scan.distanceToRef.empty()) return;
 
-    // Optionally restrict to occlusal zone: find Z_max then keep only
-    // vertices within zWindowMm below it (tooth crowns, not gingiva).
-    double zThresh = -std::numeric_limits<double>::infinity();
-    if (zWindowMm > 0.0) {
+    // ── build the vertex mask ─────────────────────────────────────────────
+    // Priority: fitted occlusal plane > simple Z-window > all vertices.
+    std::vector<double> d;
+    d.reserve(scan.distanceToRef.size());
+
+    if (plane.active) {
+        // Plane-based filter: keep vertices within [-belowMm, +aboveMm]
+        // along the plane normal.
+        for (auto v : scan.mesh.vertices()) {
+            const Point3& p = scan.mesh.point(v);
+            Eigen::Vector3d pt(CGAL::to_double(p.x()),
+                               CGAL::to_double(p.y()),
+                               CGAL::to_double(p.z()));
+            double dist = plane.normal.dot(pt - plane.origin);
+            if (dist < -plane.belowMm || dist > plane.aboveMm) continue;
+            d.push_back(scan.distanceToRef[v.idx()]);
+        }
+    } else if (zWindowMm > 0.0) {
+        // Legacy simple Z-window: keep top zWindowMm below Z_max.
         double zMax = -std::numeric_limits<double>::infinity();
         for (auto v : scan.mesh.vertices())
             zMax = std::max(zMax, CGAL::to_double(scan.mesh.point(v).z()));
-        zThresh = zMax - zWindowMm;
+        const double zThresh = zMax - zWindowMm;
+        for (auto v : scan.mesh.vertices()) {
+            if (CGAL::to_double(scan.mesh.point(v).z()) < zThresh) continue;
+            d.push_back(scan.distanceToRef[v.idx()]);
+        }
+    } else {
+        // All vertices.
+        for (auto v : scan.mesh.vertices())
+            d.push_back(scan.distanceToRef[v.idx()]);
     }
 
-    std::vector<double> d;
-    d.reserve(scan.distanceToRef.size());
-    for (auto v : scan.mesh.vertices()) {
-        if (zWindowMm > 0.0 &&
-            CGAL::to_double(scan.mesh.point(v).z()) < zThresh)
-            continue;
-        d.push_back(scan.distanceToRef[v.idx()]);
-    }
     if (d.empty()) return;
 
     const std::size_t n = d.size();

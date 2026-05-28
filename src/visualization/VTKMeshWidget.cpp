@@ -3,6 +3,7 @@
 
 #include <QVTKOpenGLNativeWidget.h>
 #include <QVBoxLayout>
+#include <QMouseEvent>
 
 #include <vtkPoints.h>
 #include <vtkCellArray.h>
@@ -15,6 +16,14 @@
 #include <vtkProperty.h>
 #include <vtkCamera.h>
 #include <vtkTextProperty.h>
+#include <vtkCellPicker.h>
+#include <vtkSphereSource.h>
+#include <vtkDiskSource.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
+#include <vtkMath.h>
+
+#include <Eigen/Geometry>
 
 VTKMeshWidget::VTKMeshWidget(QWidget* parent)
     : QWidget(parent)
@@ -73,6 +82,9 @@ void VTKMeshWidget::buildPipeline()
     // interactor style
     auto style = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
     m_vtkWidget->interactor()->SetInteractorStyle(style);
+
+    // event filter intercepts mouse events for pick mode
+    m_vtkWidget->installEventFilter(this);
 }
 
 // static
@@ -229,5 +241,165 @@ void VTKMeshWidget::setOverlayMeshes(
 
     m_titleLabel->setText(QString("Overlay – %1 registered scans").arg(scans.size()));
     m_renderer->ResetCamera();
+    m_renderWindow->Render();
+}
+
+// ── occlusal-plane picking ────────────────────────────────────────────────────
+
+void VTKMeshWidget::setPickMode(bool active)
+{
+    m_pickMode = active;
+    // Change cursor so the user gets visual feedback
+    if (active)
+        m_vtkWidget->setCursor(Qt::CrossCursor);
+    else
+        m_vtkWidget->unsetCursor();
+}
+
+bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
+{
+    if (m_pickMode && obj == m_vtkWidget &&
+        event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton) {
+            // VTK Y-axis is flipped relative to Qt
+            const int x = me->pos().x();
+            const int y = m_vtkWidget->height() - me->pos().y() - 1;
+
+            vtkNew<vtkCellPicker> picker;
+            picker->SetTolerance(0.0005);
+            if (picker->Pick(x, y, 0, m_renderer)) {
+                double pos[3];
+                picker->GetPickPosition(pos);
+                emit pointPicked(pos[0], pos[1], pos[2]);
+            }
+            return true; // consume — don't forward to VTK (no camera rotation)
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+void VTKMeshWidget::clearPickActors()
+{
+    for (auto& a : m_pickActors)
+        m_renderer->RemoveActor(a);
+    m_pickActors.clear();
+    m_renderWindow->Render();
+}
+
+void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts)
+{
+    // Remove existing spheres, keep plane actors (last 3 if present)
+    for (auto& a : m_pickActors)
+        m_renderer->RemoveActor(a);
+    m_pickActors.clear();
+
+    for (const auto& pt : pts) {
+        auto sphere = vtkSmartPointer<vtkSphereSource>::New();
+        sphere->SetCenter(pt[0], pt[1], pt[2]);
+        sphere->SetRadius(0.6);
+        sphere->SetPhiResolution(12);
+        sphere->SetThetaResolution(12);
+
+        auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+        mapper->SetInputConnection(sphere->GetOutputPort());
+
+        auto actor = vtkSmartPointer<vtkActor>::New();
+        actor->SetMapper(mapper);
+        actor->GetProperty()->SetColor(1.0, 0.85, 0.0); // yellow
+        actor->GetProperty()->SetAmbient(0.4);
+        actor->GetProperty()->SetDiffuse(0.6);
+
+        m_renderer->AddActor(actor);
+        m_pickActors.push_back(actor);
+    }
+    m_renderWindow->Render();
+}
+
+// Build a flat disk perpendicular to `normal` centred at `center`.
+// Uses a vtkDiskSource and a vtkTransform to orient it.
+vtkSmartPointer<vtkActor> VTKMeshWidget::makeDiskActor(
+    const Eigen::Vector3d& normal,
+    const Eigen::Vector3d& center,
+    double radius,
+    double opacity,
+    double r, double g, double b)
+{
+    auto disk = vtkSmartPointer<vtkDiskSource>::New();
+    disk->SetInnerRadius(0.0);
+    disk->SetOuterRadius(radius);
+    disk->SetCircumferentialResolution(48);
+    disk->SetRadialResolution(1);
+    disk->Update();
+
+    // vtkDiskSource lies in the XY plane (normal = Z).  Rotate to `normal`.
+    Eigen::Vector3d zAxis(0.0, 0.0, 1.0);
+    Eigen::Vector3d axis = zAxis.cross(normal);
+    double sinAngle = axis.norm();
+    double cosAngle = zAxis.dot(normal);
+    double angleDeg = std::atan2(sinAngle, cosAngle) * 180.0 / vtkMath::Pi();
+
+    auto transform = vtkSmartPointer<vtkTransform>::New();
+    transform->Translate(center.x(), center.y(), center.z());
+    if (sinAngle > 1e-6)
+        transform->RotateWXYZ(angleDeg,
+                              axis.x() / sinAngle,
+                              axis.y() / sinAngle,
+                              axis.z() / sinAngle);
+
+    auto filter = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+    filter->SetInputConnection(disk->GetOutputPort());
+    filter->SetTransform(transform);
+
+    auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper->SetInputConnection(filter->GetOutputPort());
+
+    auto actor = vtkSmartPointer<vtkActor>::New();
+    actor->SetMapper(mapper);
+    actor->GetProperty()->SetColor(r, g, b);
+    actor->GetProperty()->SetOpacity(opacity);
+    actor->GetProperty()->LightingOff();
+    actor->GetProperty()->SetRepresentationToSurface();
+    return actor;
+}
+
+void VTKMeshWidget::showOcclusalPlane(const Eigen::Vector3d& normal,
+                                       const Eigen::Vector3d& origin,
+                                       double aboveMm, double belowMm,
+                                       double radius)
+{
+    // Remove existing plane actors (keep sphere actors for picked points)
+    // Plane actors are always appended after spheres, so we remove from the
+    // last 3 entries if they are planes.  Simplest: rebuild all from scratch.
+    // (spheres are re-drawn by the caller via showPickSpheres before this)
+
+    // Remove any previous plane actors tagged in m_pickActors
+    // We tag plane actors by storing them at the end; clear all and let
+    // caller re-add spheres.  Actual spheres are passed through showPickSpheres
+    // which is called first by the MainWindow.
+    for (auto& a : m_pickActors)
+        m_renderer->RemoveActor(a);
+    m_pickActors.clear();
+
+    // Central plane – grey, 30% opacity
+    auto planeActor = makeDiskActor(normal, origin, radius, 0.30,
+                                    0.6, 0.6, 0.6);
+    m_renderer->AddActor(planeActor);
+    m_pickActors.push_back(planeActor);
+
+    // Above-offset plane – green, 20% opacity
+    Eigen::Vector3d aboveOrigin = origin + aboveMm * normal;
+    auto aboveActor = makeDiskActor(normal, aboveOrigin, radius, 0.20,
+                                    0.2, 0.8, 0.2);
+    m_renderer->AddActor(aboveActor);
+    m_pickActors.push_back(aboveActor);
+
+    // Below-offset plane – cyan, 20% opacity
+    Eigen::Vector3d belowOrigin = origin - belowMm * normal;
+    auto belowActor = makeDiskActor(normal, belowOrigin, radius, 0.20,
+                                    0.2, 0.6, 0.9);
+    m_renderer->AddActor(belowActor);
+    m_pickActors.push_back(belowActor);
+
     m_renderWindow->Render();
 }
