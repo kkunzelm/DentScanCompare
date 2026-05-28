@@ -143,6 +143,7 @@ void MetricsTableWidget::exportCSV()
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
 
     QTextStream out(&file);
+    out.setGenerateByteOrderMark(true); // UTF-8 BOM – makes Excel on Windows read special chars correctly
     // header
     for (int c = 0; c < m_table->columnCount(); ++c) {
         out << m_table->horizontalHeaderItem(c)->text();

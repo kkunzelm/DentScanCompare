@@ -1,44 +1,41 @@
 #pragma once
 
 #include "../core/Mesh.h"
-#include "../core/MetricReport.h"
-#include "ColorMapLUT.h"
 #include <QWidget>
-#include <vtkSmartPointer.h>
-#include <vtkContextView.h>
-#include <vtkChartXY.h>
-#include <vtkGenericOpenGLRenderWindow.h>
+#include <QImage>
 #include <memory>
 #include <vector>
 
-class QVTKOpenGLNativeWidget;
-
-// VTK-based scatter plot: |mean curvature| vs. triangle area for all scanners.
-// One colour-coded series per scanner. Log scale on both axes.
+// QPainter-based log-log scatter plot: |mean curvature| vs. triangle area.
+// One colour-coded series per scanner.
 class ScatterPlotWidget : public QWidget
 {
     Q_OBJECT
 public:
     explicit ScatterPlotWidget(QWidget* parent = nullptr);
-    ~ScatterPlotWidget() override = default;
 
-    // Rebuild the scatter plot from all scans.
-    // Requires scan->tessellationMetricsComputed == true for each entry.
-    // maxPointsPerScan: subsampling limit for rendering performance.
     void setScans(const std::vector<std::shared_ptr<ScanData>>& scans,
                   int maxPointsPerScan = 30000);
-
     void clear();
 
-    // Render to an offscreen image for export.
-    // Returns a vtkImageData with the chart rendered at the given pixel size.
-    vtkSmartPointer<vtkImageData> renderToImage(int width, int height);
+    // Render to an off-screen image for export.
+    QImage renderToImage(int width, int height);
+
+protected:
+    void paintEvent(QPaintEvent*) override;
 
 private:
-    void buildPipeline();
+    struct Series {
+        std::string name;
+        std::vector<float> xLog; // log10(|kH|)
+        std::vector<float> yLog; // log10(area)
+        QColor color;
+    };
 
-    QVTKOpenGLNativeWidget*  m_vtkWidget   = nullptr;
-    vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
-    vtkSmartPointer<vtkContextView> m_contextView;
-    vtkSmartPointer<vtkChartXY>     m_chart;
+    std::vector<Series> m_series;
+    float m_xMin = -3.f, m_xMax = 1.f;
+    float m_yMin = -4.f, m_yMax = 0.f;
+
+    void  drawChart(QPainter& p, int w, int h) const;
+    static QColor seriesColor(int idx);
 };

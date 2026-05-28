@@ -426,19 +426,15 @@ void MainWindow::onAnalysisFinished()
 {
     m_progress->hide();
     setStatus("Analysis complete.");
-    updateFingerprintTab();
-    updateDistanceMapsTab();
-    updateMetricsTab();
 
-    // switch to Fingerprint tab to show first result
+    // Switch to Fingerprint tab BEFORE updating it so the widget
+    // is visible when QPainter redraws it.
     m_tabs->setCurrentIndex(1);
 
-    // update registration status
-    if (m_gpaReference) {
-        m_registrationStatus->setText(
-            QString("GPA converged. Reference: %1 triangles.")
-            .arg(m_gpaReference->triangleCount));
-    }
+    updateFingerprintTab();
+    updateRegistrationTab();
+    updateDistanceMapsTab();
+    updateMetricsTab();
 }
 
 void MainWindow::showExportDialog()
@@ -447,10 +443,10 @@ void MainWindow::showExportDialog()
         this, "Select export directory", QDir::homePath());
     if (dir.isEmpty()) return;
 
-    // Export fingerprint
+    // Export fingerprint (QPainter renders to QImage, saved directly)
     if (m_scatterPlot) {
-        auto img = m_scatterPlot->renderToImage(2400, 1800);
-        ReportExporter::imageToPNG(img, dir + "/fingerprint_300dpi.png");
+        QImage img = m_scatterPlot->renderToImage(2400, 1800);
+        img.save(dir + "/fingerprint_300dpi.png");
     }
 
     // Export distance maps
@@ -513,6 +509,24 @@ void MainWindow::updateFingerprintTab()
             .arg(r.meanEdgeLength, 0, 'f', 3);
     }
     m_atiLabel->setText(atiText);
+}
+
+void MainWindow::updateRegistrationTab()
+{
+    if (m_overlayWidget && !m_scans.empty())
+        m_overlayWidget->setOverlayMeshes(m_scans);
+
+    if (m_gpaReference && !m_reports.empty()) {
+        QString s = QString("GPA complete. Reference: %1 triangles.\n\n")
+                        .arg(m_gpaReference->triangleCount);
+        for (const auto& r : m_reports) {
+            if (!std::isnan(r.rmsDistance))
+                s += QString("%1: RMS = %2 mm\n")
+                         .arg(QString::fromStdString(r.scannerName))
+                         .arg(r.rmsDistance, 0, 'f', 3);
+        }
+        m_registrationStatus->setText(s.trimmed());
+    }
 }
 
 void MainWindow::updateDistanceMapsTab()

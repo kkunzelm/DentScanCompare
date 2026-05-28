@@ -190,3 +190,44 @@ void VTKMeshWidget::resetCamera()
     m_renderer->ResetCamera();
     m_renderWindow->Render();
 }
+
+void VTKMeshWidget::clearOverlayActors()
+{
+    for (auto& a : m_overlayActors)
+        m_renderer->RemoveActor(a);
+    m_overlayActors.clear();
+    m_actor->VisibilityOn();
+}
+
+void VTKMeshWidget::setOverlayMeshes(
+    const std::vector<std::shared_ptr<ScanData>>& scans)
+{
+    clearOverlayActors();
+    m_actor->VisibilityOff(); // hide the single-mesh actor
+
+    auto colors = ColorMapLUT::scannerColors();
+    for (std::size_t si = 0; si < scans.size(); ++si) {
+        if (!scans[si]) continue;
+
+        auto pd = cgalToVTK(scans[si]->mesh);
+
+        auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+        mapper->SetInputData(pd);
+        mapper->ScalarVisibilityOff();
+
+        auto actor = vtkSmartPointer<vtkActor>::New();
+        actor->SetMapper(mapper);
+        std::size_t ci = si % colors.size();
+        actor->GetProperty()->SetColor(colors[ci][0], colors[ci][1], colors[ci][2]);
+        actor->GetProperty()->SetOpacity(0.45);
+        actor->GetProperty()->SetAmbient(0.3);
+        actor->GetProperty()->SetDiffuse(0.7);
+
+        m_renderer->AddActor(actor);
+        m_overlayActors.push_back(actor);
+    }
+
+    m_titleLabel->setText(QString("Overlay – %1 registered scans").arg(scans.size()));
+    m_renderer->ResetCamera();
+    m_renderWindow->Render();
+}

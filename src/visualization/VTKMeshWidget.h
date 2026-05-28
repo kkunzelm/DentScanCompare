@@ -46,6 +46,12 @@ public:
     // Reset camera to fit the current actor.
     void resetCamera();
 
+    // Show all scans as colour-coded semi-transparent overlay.
+    void setOverlayMeshes(const std::vector<std::shared_ptr<ScanData>>& scans);
+
+    // Remove all overlay actors (reverts to the single primary actor).
+    void clearOverlayActors();
+
 private:
     void buildPipeline();
 
@@ -54,6 +60,8 @@ private:
 
     QLabel*                  m_titleLabel  = nullptr;
     QVTKOpenGLNativeWidget*  m_vtkWidget   = nullptr;
+
+    std::vector<vtkSmartPointer<vtkActor>> m_overlayActors;
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>     m_renderer;

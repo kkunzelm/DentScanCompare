@@ -44,6 +44,7 @@ private:
     void updateScannerList();
     void updateOverviewTab();
     void updateFingerprintTab();
+    void updateRegistrationTab();
     void updateDistanceMapsTab();
     void updateMetricsTab();
     void setStatus(const QString& msg);

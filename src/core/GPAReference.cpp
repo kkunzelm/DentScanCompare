@@ -1,59 +1,88 @@
 #include "GPAReference.h"
 
-#include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
+#include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace GPAReference {
 
 namespace {
 
-// Build a mean SurfaceMesh from N corresponding point sets.
-// All meshes must have the same topology (same number of vertices, same connectivity).
-// We'll use the reference mesh topology and average vertex positions.
-void updateReference(
-    ScanData& ref,
-    const std::vector<std::shared_ptr<ScanData>>& scans)
+// Centre the mesh at its centroid and optionally align PCA axes.
+// Returns the 4×4 transform that was applied (so the caller can accumulate it).
+Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
 {
-    auto& refMesh = ref.mesh;
-    std::size_t nVerts = refMesh.num_vertices();
+    const auto& mesh = scan.mesh;
+    std::size_t n = mesh.num_vertices();
+    if (n == 0) return Eigen::Matrix4d::Identity();
 
-    // zero out reference positions
-    std::vector<Eigen::Vector3d> avg(nVerts, Eigen::Vector3d::Zero());
-
-    // For each scan, find the closest vertex in the reference for each of the
-    // scan's sampled points and accumulate. Since topologies differ, we use a
-    // simpler approach: take the reference topology and for each reference
-    // vertex find the closest point across all other scans.
-    //
-    // Practical approach: only average the registered scans by assuming the
-    // registration has aligned them well enough that we can use AABB queries.
-    // For now: use the Primescan/most-triangulated scan as reference topology
-    // and blend toward the mean by ICP.
-
-    // Accumulate reference positions as the mean of current scan transforms
-    for (auto v : refMesh.vertices()) {
-        const Point3& p = refMesh.point(v);
-        avg[v.idx()] = Eigen::Vector3d(p.x(), p.y(), p.z());
+    // --- centroid ---
+    Eigen::Vector3d mu = Eigen::Vector3d::Zero();
+    for (auto v : mesh.vertices()) {
+        const Point3& p = mesh.point(v);
+        mu += Eigen::Vector3d(p.x(), p.y(), p.z());
     }
-    // weight existing reference equally with all scans
-    double w = 1.0 / (scans.size() + 1.0);
-    for (auto v : refMesh.vertices()) avg[v.idx()] *= w;
+    mu /= static_cast<double>(n);
 
-    // For each other scan, map its vertices to reference vertices via AABB
-    // (simplified: we just use the reference position directly after ICP has
-    // converged; detailed mean would require a signed distance field approach)
-    // This is a first-order approximation that works well when ICP has converged.
-    for (const auto& scan : scans) {
-        for (auto v : scan->mesh.vertices()) {
-            // find closest reference vertex
-            // simplified: skip resampling, just add weighted scan vertex to nearest ref vertex
-            // full impl would use AABB tree; here we trust ICP convergence
+    // --- covariance matrix ---
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    for (auto v : mesh.vertices()) {
+        const Point3& p = mesh.point(v);
+        Eigen::Vector3d d(p.x()-mu[0], p.y()-mu[1], p.z()-mu[2]);
+        cov += d * d.transpose();
+    }
+    cov /= static_cast<double>(n);
+
+    // Eigenvalues sorted ascending; col(2) = largest variance direction.
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(cov);
+    Eigen::Matrix3d R;
+    R.col(0) = eig.eigenvectors().col(2); // largest  → X (left–right)
+    R.col(1) = eig.eigenvectors().col(1); // medium   → Y (front–back)
+    R.col(2) = eig.eigenvectors().col(0); // smallest → Z (≈ occlusal normal)
+    if (R.determinant() < 0) R.col(0) = -R.col(0);
+
+    // --- resolve Z-sign: occlusal (high curvature) should be at +Z ---
+    auto meanMapOpt = mesh.property_map<VertexDesc, double>("v:mean_curv");
+    if (meanMapOpt.has_value()) {
+        const auto& mm = meanMapOpt.value();
+        const Eigen::Vector3d& zAx = R.col(2);
+
+        // median curvature as threshold
+        std::vector<double> kv;
+        kv.reserve(n);
+        for (auto v : mesh.vertices())
+            kv.push_back(std::abs(get(mm, v)));
+        std::nth_element(kv.begin(), kv.begin() + n/2, kv.end());
+        double kMed = kv[n/2];
+
+        double sumHighZ = 0.0, sumLowZ = 0.0;
+        int nHigh = 0, nLow = 0;
+        for (auto v : mesh.vertices()) {
+            const Point3& p = mesh.point(v);
+            Eigen::Vector3d d(p.x()-mu[0], p.y()-mu[1], p.z()-mu[2]);
+            double z = zAx.dot(d);
+            if (std::abs(get(mm, v)) >= kMed) { sumHighZ += z; ++nHigh; }
+            else                               { sumLowZ  += z; ++nLow;  }
+        }
+        double meanHighZ = (nHigh > 0) ? sumHighZ / nHigh : 0.0;
+        double meanLowZ  = (nLow  > 0) ? sumLowZ  / nLow  : 0.0;
+
+        // If high-curvature (teeth) is on the -Z side, flip Z and Y to keep right-handed.
+        if (meanHighZ < meanLowZ) {
+            R.col(2) = -R.col(2);
+            R.col(1) = -R.col(1);
         }
     }
-    // For simplicity in this implementation, keep reference aligned to the
-    // ICP consensus (the reference doesn't move much after convergence).
+
+    // Transform: T(x) = R^T * (x - mu)
+    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+    T.block<3,3>(0,0) = R.transpose();
+    T.block<3,1>(0,3) = -(R.transpose() * mu);
+
+    ICPRegistration::applyTransform(scan, T);
+    return T;
 }
 
 } // namespace
@@ -65,19 +94,28 @@ std::shared_ptr<ScanData> compute(
 {
     if (scans.empty()) return nullptr;
 
-    // --- pick initial reference: largest triangle count ---
+    // --- Step 0: PCA coarse alignment (handles large translational +
+    //     moderate rotational offsets between scanner coordinate systems) ---
+    for (auto& scan : scans)
+        pcaCoarseAlign(*scan);
+
+    // --- Initial reference: deepcopy of the scan with most triangles ---
     auto refIt = std::max_element(scans.begin(), scans.end(),
         [](const auto& a, const auto& b){
             return a->triangleCount < b->triangleCount; });
-    std::shared_ptr<ScanData> reference = *refIt;
-
-    // deep-copy reference as the working GPA reference
     auto gpaRef = std::make_shared<ScanData>();
-    gpaRef->mesh = reference->mesh;
+    gpaRef->mesh          = (*refIt)->mesh;
     gpaRef->scannerName   = "GPA_Reference";
     gpaRef->triangleCount = gpaRef->mesh.number_of_faces();
 
-    ICPRegistration::Params icpP = params.icpParams;
+    // --- GPA iterations ---
+    // Use multi-pass ICP per scan: coarse (large radius) then fine (tight radius).
+    ICPRegistration::Params fineP = params.icpParams;
+
+    ICPRegistration::Params coarseP = fineP;
+    coarseP.maxCorrespDist = 25.0; // [mm] – bridges residual offset after PCA
+    coarseP.maxIterations  = 40;
+    coarseP.convergenceRms = 0.1;
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
         double maxDisp = 0.0;
@@ -86,14 +124,19 @@ std::shared_ptr<ScanData> compute(
             auto& scan = scans[si];
             if (scan.get() == gpaRef.get()) continue;
 
-            auto icpResult = ICPRegistration::align(
-                *scan, *gpaRef, icpP,
+            // Coarse pass – needed mainly in cycle 0 for misaligned scans.
+            if (cycle == 0) {
+                auto r0 = ICPRegistration::align(*scan, *gpaRef, coarseP);
+                ICPRegistration::applyTransform(*scan, r0.transform);
+            }
+
+            // Fine pass.
+            auto r1 = ICPRegistration::align(*scan, *gpaRef, fineP,
                 [&](int it, double rms){
                     if (progressCallback) progressCallback(cycle, (int)si, rms);
-                }
-            );
-            ICPRegistration::applyTransform(*scan, icpResult.transform);
-            maxDisp = std::max(maxDisp, icpResult.finalRms);
+                });
+            ICPRegistration::applyTransform(*scan, r1.transform);
+            maxDisp = std::max(maxDisp, r1.finalRms);
         }
 
         if (maxDisp < params.convergenceThresh) break;
