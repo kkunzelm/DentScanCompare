@@ -22,6 +22,7 @@
 #include <vtkTransform.h>
 #include <vtkTransformPolyDataFilter.h>
 #include <vtkMath.h>
+#include <vtkUnsignedCharArray.h>
 
 #include <Eigen/Geometry>
 
@@ -401,5 +402,53 @@ void VTKMeshWidget::showOcclusalPlane(const Eigen::Vector3d& normal,
     m_renderer->AddActor(belowActor);
     m_pickActors.push_back(belowActor);
 
+    m_renderWindow->Render();
+}
+
+// ── Tooth-segmentation overlay ────────────────────────────────────────────────
+// Colours the mesh: tooth crown = warm ivory (255,245,220),
+//                   gingiva / unassigned = dark grey (80,80,80).
+
+void VTKMeshWidget::showToothSegmentation(const std::shared_ptr<ScanData>& scan,
+                                           const std::vector<bool>& toothMask)
+{
+    if (!scan) return;
+
+    if (toothMask.empty()) {
+        showPhongShading();
+        return;
+    }
+
+    // Rebuild the polydata with per-vertex RGB colours
+    auto pd = cgalToVTK(scan->mesh);
+
+    auto colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    colors->SetName("SegmentationColor");
+    colors->SetNumberOfComponents(3);
+    colors->SetNumberOfTuples(
+        static_cast<vtkIdType>(scan->mesh.num_vertices()));
+
+    for (auto v : scan->mesh.vertices()) {
+        vtkIdType idx = static_cast<vtkIdType>(v.idx());
+        bool isTooth = (v.idx() < toothMask.size()) && toothMask[v.idx()];
+        if (isTooth)
+            colors->SetTuple3(idx, 255, 245, 220); // ivory
+        else
+            colors->SetTuple3(idx,  70,  70,  70); // dark grey
+    }
+    pd->GetPointData()->SetScalars(colors);
+
+    m_polyData->DeepCopy(pd);
+    m_mapper->SetInputData(m_polyData);
+    m_mapper->SetColorModeToDirectScalars();
+    m_mapper->ScalarVisibilityOn();
+    m_colorBar->VisibilityOff();
+
+    const std::size_t nTooth = std::count(toothMask.begin(), toothMask.end(), true);
+    m_titleLabel->setText(
+        QString::fromStdString(scan->scannerName) +
+        QString(" – %1 tooth vertices").arg(nTooth));
+
+    m_renderer->ResetCamera();
     m_renderWindow->Render();
 }

@@ -8,6 +8,7 @@ set(SOURCES
     core/GPAReference.cpp
     core/DistanceField.cpp
     core/ArchMetrics.cpp
+    core/ToothSegmentation.cpp
     visualization/VTKMeshWidget.cpp
     visualization/ColorMapLUT.cpp
     visualization/ScatterPlotWidget.cpp

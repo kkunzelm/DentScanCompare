@@ -7,6 +7,7 @@
 #include "core/GPAReference.h"
 #include "core/DistanceField.h"
 #include "core/ArchMetrics.h"
+#include "core/ToothSegmentation.h"
 #include "visualization/VTKMeshWidget.h"
 #include "visualization/ScatterPlotWidget.h"
 #include "visualization/MetricsTableWidget.h"
@@ -704,27 +705,58 @@ void MainWindow::onPointPicked(double x, double y, double z)
 {
     m_pickedPts.push_back({x, y, z});
     const int n = static_cast<int>(m_pickedPts.size());
-    m_pickCountLabel->setText(QString("%1 point%2 picked").arg(n).arg(n == 1 ? "" : "s"));
 
     // Update sphere visualization immediately
     if (m_overlayWidget)
         m_overlayWidget->showPickSpheres(m_pickedPts);
 
-    // Fit plane as soon as we have 3+ points and refresh visualization
+    // Fit plane as soon as we have 3+ points
     if (n >= 3) {
         fitOcclusalPlane();
         updatePlaneVisualization();
-        m_recomputeBtn->setEnabled(true);
     }
+
+    // Run tooth segmentation: use GPA reference mesh (most triangles, aligned)
+    // as the template; the same mask is applied to all scans in recomputeMetrics.
+    if (!m_scans.empty()) {
+        // Pick the scan with the most triangles as segmentation template
+        auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
+            [](const auto& a, const auto& b){
+                return a->triangleCount < b->triangleCount; });
+
+        m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts);
+
+        const std::size_t nTooth = std::count(m_toothMask.begin(), m_toothMask.end(), true);
+        m_pickCountLabel->setText(
+            QString("%1 seed%2 — %3 tooth vertices segmented")
+                .arg(n).arg(n == 1 ? "" : "s").arg(nTooth));
+
+        // Show segmentation on the overlay widget
+        if (m_overlayWidget)
+            m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
+    } else {
+        m_pickCountLabel->setText(
+            QString("%1 point%2 picked (load scans first)")
+                .arg(n).arg(n == 1 ? "" : "s"));
+    }
+
+    m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
 }
 
 void MainWindow::clearPickedPoints()
 {
     m_pickedPts.clear();
+    m_toothMask.clear();
     m_occlusalPlane.active = false;
     m_pickCountLabel->setText("0 points picked");
     m_recomputeBtn->setEnabled(false);
-    if (m_overlayWidget) m_overlayWidget->clearPickActors();
+    if (m_overlayWidget) {
+        m_overlayWidget->clearPickActors();
+        if (!m_scans.empty()) {
+            // Restore overlay after clearing segmentation colours
+            m_overlayWidget->setOverlayMeshes(m_scans);
+        }
+    }
 }
 
 void MainWindow::fitOcclusalPlane()
@@ -779,19 +811,23 @@ void MainWindow::recomputeMetrics()
         return;
     }
 
-    // Build the plane filter from current UI state
+    // Determine active filter (priority: segmentation mask > plane > Z-window)
+    const bool  haveMask = !m_toothMask.empty();
     DistanceField::OcclusalPlane plane = m_occlusalPlane;
-    if (plane.active) {
+    if (plane.active && !haveMask) {
         plane.aboveMm = m_planeAboveSpin ? m_planeAboveSpin->value() : 2.0;
         plane.belowMm = m_planeBelowSpin ? m_planeBelowSpin->value() : 12.0;
     }
-    const double zWindow = (!plane.active && m_zWindowSpin)
+    const double zWindow = (!haveMask && !plane.active && m_zWindowSpin)
                            ? m_zWindowSpin->value() : 0.0;
 
+    // For non-reference scans we re-use the same tooth mask (the mask was
+    // built on the highest-triangle scan but the geometry is aligned, so
+    // it is a good approximation for all scans).
     setStatus("Recomputing metrics…");
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
-        // Distance field is already computed; just re-fill the report
-        DistanceField::fillReport(*m_scans[i], m_reports[i], 0.2, zWindow, plane);
+        DistanceField::fillReport(*m_scans[i], m_reports[i],
+                                  0.2, zWindow, plane, m_toothMask);
         ArchMetrics::computeBoundaryMetrics(*m_scans[i], m_reports[i]);
         ArchMetrics::computeStitchingArtifacts(*m_scans[i], m_reports[i]);
     }
@@ -799,8 +835,15 @@ void MainWindow::recomputeMetrics()
     updateMetricsTab();
     updateRegistrationTab();
     updateDistanceMapsTab();
-    setStatus(plane.active
-        ? QString("Metrics updated – occlusal plane (above %1 mm / below %2 mm).")
-              .arg(plane.aboveMm, 0, 'f', 1).arg(plane.belowMm, 0, 'f', 1)
-        : "Metrics updated.");
+
+    QString filterDesc = haveMask
+        ? QString("tooth segmentation (%1 vertices)")
+              .arg(std::count(m_toothMask.begin(), m_toothMask.end(), true))
+        : plane.active
+            ? QString("plane slab (±%1/−%2 mm)")
+                  .arg(plane.aboveMm, 0,'f',1).arg(plane.belowMm, 0,'f',1)
+            : zWindow > 0
+                ? QString("Z-window %1 mm").arg(zWindow, 0,'f',0)
+                : "full scan";
+    setStatus("Metrics updated – filter: " + filterDesc + ".");
 }

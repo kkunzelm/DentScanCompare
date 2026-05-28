@@ -24,12 +24,18 @@ struct OcclusalPlane {
 void compute(ScanData& scan, const ScanData& reference);
 
 // Fills the local-accuracy section of report from scan->distanceToRef.
-// Priority:  plane.active → plane-based filter (ignores zWindowMm)
-//            zWindowMm > 0 → simple Z-max window (legacy)
-//            otherwise → all vertices
+//
+// Filter priority (highest wins):
+//   toothMask non-empty → use per-vertex segmentation mask (from ToothSegmentation)
+//   plane.active        → plane-based slab filter
+//   zWindowMm > 0       → simple Z-max window (legacy fallback)
+//   (none active)       → all vertices
+//
+// toothMask: per-vertex bool, size == scan.mesh.num_vertices().  Empty = unused.
 void fillReport(const ScanData& scan, MetricReport& report,
                 double coverageThreshold = 0.2,
                 double zWindowMm = 0.0,
-                const OcclusalPlane& plane = {});
+                const OcclusalPlane& plane = {},
+                const std::vector<bool>& toothMask = {});
 
 } // namespace DistanceField

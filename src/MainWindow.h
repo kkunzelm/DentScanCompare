@@ -104,6 +104,10 @@ private:
     std::vector<std::array<double,3>> m_pickedPts;
     DistanceField::OcclusalPlane      m_occlusalPlane;
 
+    // tooth-segmentation mask (per vertex, for the first loaded scan used as
+    // the segmentation reference; applied to all scans in recomputeMetrics)
+    std::vector<bool>                 m_toothMask;
+
     // ---- Tab 4: Distance Maps ----
     QWidget*                    m_tab4       = nullptr;
     std::vector<VTKMeshWidget*> m_distWidgets;

@@ -59,6 +59,11 @@ public:
     // Remove all pick-related actors (spheres and plane).
     void clearPickActors();
 
+    // Colour-code the mesh by segmentation: tooth = warm ivory,
+    // gingiva = dark grey.  Pass an empty mask to revert to plain shading.
+    void showToothSegmentation(const std::shared_ptr<ScanData>& scan,
+                               const std::vector<bool>& toothMask);
+
 signals:
     // Emitted when the user left-clicks a surface in pick mode.
     void pointPicked(double x, double y, double z);

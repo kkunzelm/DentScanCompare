@@ -57,16 +57,26 @@ void compute(ScanData& scan, const ScanData& reference)
 
 void fillReport(const ScanData& scan, MetricReport& report,
                 double coverageThreshold, double zWindowMm,
-                const OcclusalPlane& plane)
+                const OcclusalPlane& plane,
+                const std::vector<bool>& toothMask)
 {
     if (!scan.distanceComputed || scan.distanceToRef.empty()) return;
 
-    // ── build the vertex mask ─────────────────────────────────────────────
-    // Priority: fitted occlusal plane > simple Z-window > all vertices.
+    // ── build the distance sample set ─────────────────────────────────────
+    // Priority: segmentation mask > plane slab > Z-window > all vertices.
     std::vector<double> d;
     d.reserve(scan.distanceToRef.size());
 
-    if (plane.active) {
+    const bool haveMask = !toothMask.empty() &&
+                          toothMask.size() == scan.mesh.num_vertices();
+
+    if (haveMask) {
+        // Tooth-segmentation mask: most anatomically accurate filter
+        for (auto v : scan.mesh.vertices()) {
+            if (!toothMask[v.idx()]) continue;
+            d.push_back(scan.distanceToRef[v.idx()]);
+        }
+    } else if (plane.active) {
         // Plane-based filter: keep vertices within [-belowMm, +aboveMm]
         // along the plane normal.
         for (auto v : scan.mesh.vertices()) {
