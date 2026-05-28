@@ -240,30 +240,67 @@ void MainWindow::setupTab3Registration()
     connect(runBtn, &QPushButton::clicked, this, &MainWindow::runAnalysis);
     ctrlLayout->addRow(runBtn);
 
-    // ── Occlusal-plane picking ────────────────────────────────────────────
+    // ── Section separator ─────────────────────────────────────────────────
     auto* sepLine = new QFrame(ctrlPanel);
     sepLine->setFrameShape(QFrame::HLine);
     sepLine->setFrameShadow(QFrame::Sunken);
     ctrlLayout->addRow(sepLine);
 
-    auto* occlLabel = new QLabel("<b>Occlusal Plane</b>", ctrlPanel);
-    occlLabel->setToolTip(
-        "Pick ≥ 3 cusp tips on the overlay to fit a plane.\n"
-        "Metrics are then restricted to the zone between\n"
-        "the two offset planes (green = above, cyan = below).");
-    ctrlLayout->addRow(occlLabel);
+    // ── Tooth Crown Segmentation (primary ROI tool) ───────────────────────
+    auto* segHeading = new QLabel("<b>Tooth Crown Segmentation</b>", ctrlPanel);
+    ctrlLayout->addRow(segHeading);
 
-    m_pickBtn = new QPushButton("📍 Pick Cusp Points", ctrlPanel);
+    auto* segInfo = new QLabel(
+        "Click once on each tooth crown\n"
+        "(cusp tip or incisal edge).\n"
+        "The region-growing algorithm\n"
+        "isolates the full crown automatically.",
+        ctrlPanel);
+    segInfo->setStyleSheet("color:#555; font-size:10px;");
+    segInfo->setWordWrap(true);
+    ctrlLayout->addRow(segInfo);
+
+    m_pickBtn = new QPushButton("📍 Pick Tooth Seeds", ctrlPanel);
     m_pickBtn->setCheckable(true);
-    m_pickBtn->setToolTip("Activate: left-click cusp tips in the overlay.\nDeactivate to stop picking.");
+    m_pickBtn->setToolTip(
+        "Enable pick mode, then left-click once on each tooth crown\n"
+        "in the overlay viewport.\n"
+        "One click per tooth is enough — place it on the occlusal/\n"
+        "incisal surface (cusp tip, central fossa, or incisal edge).\n"
+        "Do NOT click on gingiva.");
     ctrlLayout->addRow(m_pickBtn);
 
-    m_pickCountLabel = new QLabel("0 points picked", ctrlPanel);
-    m_pickCountLabel->setStyleSheet("color:#444; font-size:10px;");
-    ctrlLayout->addRow(m_pickCountLabel);
+    m_segStatusLabel = new QLabel("No seeds placed.", ctrlPanel);
+    m_segStatusLabel->setWordWrap(true);
+    m_segStatusLabel->setStyleSheet("color:#555; font-size:10px;");
+    ctrlLayout->addRow(m_segStatusLabel);
 
-    m_clearPickBtn = new QPushButton("Clear Points", ctrlPanel);
+    m_clearPickBtn = new QPushButton("Clear Seeds", ctrlPanel);
+    m_clearPickBtn->setToolTip("Remove all seed points and reset the segmentation.");
     ctrlLayout->addRow(m_clearPickBtn);
+
+    m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", ctrlPanel);
+    m_recomputeBtn->setToolTip(
+        "Re-run distance statistics using the current region of interest.\n"
+        "Does NOT re-run ICP registration (fast).");
+    m_recomputeBtn->setEnabled(false);
+    ctrlLayout->addRow(m_recomputeBtn);
+
+    // ── Occlusal Plane (fallback when no seeds are placed) ────────────────
+    auto* sepLine2 = new QFrame(ctrlPanel);
+    sepLine2->setFrameShape(QFrame::HLine);
+    sepLine2->setFrameShadow(QFrame::Sunken);
+    ctrlLayout->addRow(sepLine2);
+
+    auto* planeHeading = new QLabel("<b>Occlusal Plane</b> (fallback)", ctrlPanel);
+    planeHeading->setToolTip(
+        "When seed points are placed, the tooth segmentation above takes\n"
+        "priority and these plane controls are ignored.\n"
+        "When no seeds are placed, the plane slab is used as a coarser\n"
+        "region-of-interest filter.\n"
+        "The plane is fitted automatically through the seed points as\n"
+        "soon as 3 or more are placed.");
+    ctrlLayout->addRow(planeHeading);
 
     m_planeAboveSpin = new QDoubleSpinBox(ctrlPanel);
     m_planeAboveSpin->setRange(0.0, 10.0);
@@ -278,18 +315,18 @@ void MainWindow::setupTab3Registration()
     m_planeBelowSpin->setSingleStep(0.5);
     m_planeBelowSpin->setValue(12.0);
     m_planeBelowSpin->setSuffix(" mm");
-    m_planeBelowSpin->setToolTip("Include surface up to this far below the fitted plane (crown height).");
+    m_planeBelowSpin->setToolTip("Include surface up to this far below the fitted plane (full crown height).");
     ctrlLayout->addRow("Below plane:", m_planeBelowSpin);
 
-    m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", ctrlPanel);
-    m_recomputeBtn->setToolTip("Re-run distance statistics with the current plane / zone settings.\nDoes NOT re-run ICP (fast).");
-    m_recomputeBtn->setEnabled(false);
-    ctrlLayout->addRow(m_recomputeBtn);
+    m_pickCountLabel = new QLabel("Plane: not fitted yet.", ctrlPanel);
+    m_pickCountLabel->setStyleSheet("color:#555; font-size:10px;");
+    m_pickCountLabel->setWordWrap(true);
+    ctrlLayout->addRow(m_pickCountLabel);
 
     // ── wire picking signals ──────────────────────────────────────────────
     connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
-        m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Cusp Points");
+        m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Tooth Seeds");
     });
     connect(m_clearPickBtn, &QPushButton::clicked,
             this, &MainWindow::clearPickedPoints);
@@ -308,7 +345,7 @@ void MainWindow::setupTab3Registration()
 
     // right: overlay view
     m_overlayWidget = new VTKMeshWidget(m_tab3);
-    m_overlayWidget->setTitle("Overlay – click 'Pick Cusp Points' then left-click cusp tips");
+    m_overlayWidget->setTitle("Overlay – enable 'Pick Tooth Seeds' then left-click one cusp per tooth");
     connect(m_overlayWidget, &VTKMeshWidget::pointPicked,
             this, &MainWindow::onPointPicked);
     hlay->addWidget(m_overlayWidget, 1);
@@ -725,10 +762,9 @@ void MainWindow::onPointPicked(double x, double y, double z)
         updatePlaneVisualization();
     }
 
-    // Run tooth segmentation: use GPA reference mesh (most triangles, aligned)
-    // as the template; the same mask is applied to all scans in recomputeMetrics.
+    // Run tooth segmentation on the scan with the most triangles so the
+    // user gets immediate visual feedback in the overlay viewport.
     if (!m_scans.empty()) {
-        // Pick the scan with the most triangles as segmentation template
         auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
             [](const auto& a, const auto& b){
                 return a->triangleCount < b->triangleCount; });
@@ -736,17 +772,31 @@ void MainWindow::onPointPicked(double x, double y, double z)
         m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts);
 
         const std::size_t nTooth = std::count(m_toothMask.begin(), m_toothMask.end(), true);
-        m_pickCountLabel->setText(
-            QString("%1 seed%2 — %3 tooth vertices segmented")
-                .arg(n).arg(n == 1 ? "" : "s").arg(nTooth));
 
-        // Show segmentation on the overlay widget
+        // Segmentation status label
+        if (m_segStatusLabel)
+            m_segStatusLabel->setText(
+                QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
+                        "<span style='color:#555;'>Overlay: ivory=crown, grey=gingiva</span>")
+                    .arg(n).arg(n == 1 ? "" : "s").arg(nTooth));
+
+        // Plane status label (separate)
+        if (m_pickCountLabel)
+            m_pickCountLabel->setText(
+                n >= 3 ? QString("Plane fitted through %1 points.").arg(n)
+                       : QString("Need %1 more point%2 to fit plane.")
+                             .arg(3 - n).arg(3 - n == 1 ? "" : "s"));
+
+        // Show segmentation colours on the overlay viewport
         if (m_overlayWidget)
             m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
     } else {
-        m_pickCountLabel->setText(
-            QString("%1 point%2 picked (load scans first)")
-                .arg(n).arg(n == 1 ? "" : "s"));
+        if (m_segStatusLabel)
+            m_segStatusLabel->setText(
+                QString("%1 seed%2 placed — load scans to run segmentation.")
+                    .arg(n).arg(n == 1 ? "" : "s"));
+        if (m_pickCountLabel)
+            m_pickCountLabel->setText("Load scans first.");
     }
 
     m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
@@ -757,7 +807,8 @@ void MainWindow::clearPickedPoints()
     m_pickedPts.clear();
     m_toothMask.clear();
     m_occlusalPlane.active = false;
-    m_pickCountLabel->setText("0 points picked");
+    if (m_segStatusLabel) m_segStatusLabel->setText("No seeds placed.");
+    if (m_pickCountLabel) m_pickCountLabel->setText("Plane: not fitted yet.");
     m_recomputeBtn->setEnabled(false);
     if (m_overlayWidget) {
         m_overlayWidget->clearPickActors();

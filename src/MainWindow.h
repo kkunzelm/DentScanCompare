@@ -92,15 +92,16 @@ private:
     QSpinBox*       m_sampleSpin         = nullptr;
     QDoubleSpinBox* m_zWindowSpin        = nullptr;
 
-    // occlusal-plane picking controls
+    // tooth-segmentation / occlusal-plane picking controls
     QPushButton*    m_pickBtn            = nullptr;
-    QLabel*         m_pickCountLabel     = nullptr;
+    QLabel*         m_segStatusLabel     = nullptr;  // shows seed count + vertex count
     QPushButton*    m_clearPickBtn       = nullptr;
+    QPushButton*    m_recomputeBtn       = nullptr;
     QDoubleSpinBox* m_planeAboveSpin     = nullptr;  // zone above fitted plane [mm]
     QDoubleSpinBox* m_planeBelowSpin     = nullptr;  // zone below fitted plane [mm]
-    QPushButton*    m_recomputeBtn       = nullptr;
+    QLabel*         m_pickCountLabel     = nullptr;  // plane point count (fallback section)
 
-    // occlusal-plane state
+    // picking / segmentation state
     std::vector<std::array<double,3>> m_pickedPts;
     DistanceField::OcclusalPlane      m_occlusalPlane;
 
