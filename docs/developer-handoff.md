@@ -108,17 +108,36 @@ export/
 
 6. **ToothSegmentation** – Multi-source Dijkstra on the face adjacency graph.
    Given one seed per tooth crown (clicked on the occlusal/incisal surface), expands
-   outward face-by-face using centroid-to-centroid distance as edge cost.
+   outward face-by-face.  Edge cost is **curvature-weighted geodesic distance**:
+
+   ```
+   W(f, nb) = dist(centroid_f, centroid_nb)
+              × (1 + curvatureRepulsion × max(0, −κ_min_avg))
+   ```
+
+   where `κ_min_avg = (κ_min(f) + κ_min(nb)) / 2` and `κ_min` is the minimum
+   principal curvature, computed per face from the existing property maps as
+   `κ_H − √max(0, κ_H² − κ_G)`.  κ_min is more sensitive than κ_H at saddle-like
+   CEJ geometry (convex along the arch, concave circumferentially), where κ_H ≈ 0
+   but κ_min is strongly negative.  With `curvatureRepulsion = 0.1` (default):
+
+   | Zone | κ_min | Edge factor | Effect |
+   |------|-------|-------------|--------|
+   | Convex crown | ≥ 0 | 1.0 | No penalty |
+   | Crown fissure | ≈ −3 | 1.3 | Still reachable within budget |
+   | CEJ saddle zone | ≈ −4.5 | 1.45 | Budget consumed faster → natural deceleration |
+   | Gingival sulcus | ≈ −10 | 2.0 | Hard stop still backs it up |
+
    Stopping criteria (all must pass to expand into a neighbour):
-   - **Primary**: accumulated geodesic distance ≤ `maxGeodesicMm` (default 12 mm).
-     A full clinical crown is ≤ 12 mm surface-path from the cusp tip for every tooth
-     type: molars 8–12 mm, premolars 7–10 mm, canines 9–12 mm, incisors 10–13 mm.
-     Completely orientation-independent (replaces the old normal-tilt-from-Z BFS which
-     failed incisor palatal/lingual surfaces at 110–120° from +Z).
-   - **Secondary – crease angle**: normal dot-product between adjacent faces must be
-     above `cos(maxCreaseAngleDeg)` (default 50°).  The CEJ always creates a kink.
-   - **Secondary – curvature floor**: face mean κ_H must be > `minMeanCurvature`
-     (default -4 mm⁻¹).  The gingival sulcus is concave.
+   - **Primary**: accumulated curvature-weighted cost ≤ `maxGeodesicMm` (default 12).
+     On convex crown surfaces this closely equals physical mm; concave zones cost extra.
+     A full clinical crown reaches the cusp tip within budget for every tooth type:
+     molars 8–12 mm, premolars 7–10 mm, canines 9–12 mm, incisors 10–13 mm.
+   - **Hard stop – crease angle**: normal dot-product between adjacent faces must be
+     above `cos(maxCreaseAngleDeg)` (default 50°).  Safety net for abrupt CEJ kinks.
+   - **Hard stop – curvature floor**: face mean κ_H must be > `minMeanCurvature`
+     (default -4 mm⁻¹).  Safety net for deep gingival sulcus.
+   Setting `curvatureRepulsion = 0` restores the original pure-geodesic behaviour.
    Returns `std::vector<bool>` per vertex (true = tooth crown).
    Stored in `MainWindow::m_toothMask`; recomputed whenever operator adds seed points.
 
@@ -229,6 +248,38 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Curvature-weighted edge cost in tooth segmentation (κ_min)
+
+**Problem**: The Dijkstra edge cost was a pure centroid-to-centroid physical distance.
+Curvature (κ_H) was used only as a binary hard stop (floor −4 mm⁻¹), making the CEJ
+boundary either too permissive (gradual transitions missed) or too tight (fissures
+clipped) depending on the threshold.
+
+**Change** (`ToothSegmentation.{h,cpp}`): Edge cost is now a curvature-weighted geodesic
+distance — concave faces incur an extra multiplicative penalty so the budget is consumed
+faster there and the algorithm decelerates naturally at the gingival margin:
+
+```
+W(f, nb) = dist × (1 + curvatureRepulsion × max(0, −κ_min_avg))
+```
+
+`κ_min` (minimum principal curvature) is computed per face from the existing κ_H and
+κ_G property maps: `κ_H − √max(0, κ_H² − κ_G)`.  κ_min is more sensitive than κ_H at
+saddle-like CEJ geometry (convex along the arch, concave circumferentially), where κ_H is
+near zero but κ_min is significantly negative.  The `gaussian_curvature` (`v:gauss_curv`)
+property map — already written by `CurvatureAnalysis::compute` — is read in
+`buildFaceData()`; if unavailable, `κ_min` falls back to κ_H.
+
+New `Params` field: `double curvatureRepulsion = 0.1`.  Setting it to 0 restores the
+original pure-geodesic behaviour exactly.  The existing hard stops (crease-angle guard and
+κ_H floor) are kept unchanged as safety nets.  `FaceData` gains a `minPrincipalCurv`
+field populated in `buildFaceData()`.
+
+Motivation: Curvature-Driven Graph Cut literature (the "Minima Rule") shows that using
+curvature-weighted shortest-path costs — rather than binary thresholds alone — is the
+most robust strategy for gingival margin detection.  The modification is fully backward-
+compatible with the existing seed-placement UX (seeds on occlusal/incisal surfaces).
 
 ### 2026-05-30 – Dynamic scan-window count + sidebar reference-surface selector
 

@@ -208,8 +208,8 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
    (not per cusp — one click anywhere on the crown is sufficient).
    **Camera navigation still works in pick mode:** drag to rotate, scroll to zoom.  Only a
    short stationary click (< 6 pixels of mouse movement) registers as a seed point.
-3. Click **🛑 Stop Picking** when done.  The software immediately runs a Dijkstra-based
-   region-growing algorithm from each seed point and colours the mesh:
+3. Click **🛑 Stop Picking** when done.  The software immediately runs a curvature-weighted
+   Dijkstra region-growing algorithm from each seed point and colours the mesh:
    - **Ivory** = tooth crown (included in metrics)
    - **Dark grey** = gingiva / margins (excluded)
    The status label below the button reports the vertex count of the segmented crown area.
@@ -219,9 +219,9 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
 
 | Spinbox | Default | Effect |
 |---------|---------|--------|
-| Max geodesic | 12 mm | Maximum surface-path distance from any seed.  Decrease if adjacent teeth or gingiva bleed in; increase if parts of the crown are cut off. |
-| CEJ crease | 50° | Maximum crease angle between adjacent faces.  Decrease (e.g. 35°) to stop earlier at the gingival margin; increase (e.g. 65°) if the crown has sharp ridges. |
-| Min curvature | −4 /mm | Expansion stops when face mean κ_H drops below this floor (gingival sulcus guard).  Increase toward 0 (e.g. −2) to stop earlier; decrease (e.g. −6) if shallow crown concavities are being cut off. |
+| Max geodesic | 12 mm | Curvature-weighted geodesic budget.  On convex crown surfaces this closely equals physical mm; concave zones (CEJ, gingival sulcus) consume the budget faster.  Decrease if gingiva bleeds in; increase if parts of the crown are cut off. |
+| CEJ crease | 50° | Hard-stop crease angle between adjacent faces.  Decrease (e.g. 35°) to stop earlier at sharp CEJ kinks; increase (e.g. 65°) if the crown has abrupt ridges. |
+| Min curvature | −4 /mm | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 (e.g. −2) to stop earlier; decrease (e.g. −6) if shallow crown concavities are being cut off. |
 
 5. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
    segmentation overlay to be restored automatically whenever the registration is updated.
@@ -238,10 +238,14 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
    can run the cycle again or compare metrics before and after.
 8. If the segmentation is still wrong, click **Clear Seeds** and repeat from step 1.
 
-The segmentation expands from each seed using surface-path (geodesic) distance as the
-primary stopping criterion.  Two secondary guards stop expansion at the gingival margin: a
-crease-angle check (≥ 50° kink between adjacent face normals signals the CEJ) and a
-curvature floor (mean κ_H > −4 mm⁻¹ rejects the concave gingival sulcus).
+The segmentation expands from each seed using a **curvature-weighted geodesic distance**
+as the primary stopping criterion.  Each face-to-face edge costs physical distance ×
+(1 + penalty for concavity), where the penalty is derived from the minimum principal
+curvature κ_min = κ_H − √(κ_H²−κ_G).  This makes the budget consumed faster in
+concave regions (CEJ saddle zone, gingival sulcus), so expansion decelerates naturally
+at the tooth-gum margin — even before the two hard-stop safety nets fire:
+a crease-angle check (≥ 50° kink between face normals signals the CEJ) and
+a curvature floor (mean κ_H > −4 mm⁻¹ rejects the gingival sulcus).
 
 The segmentation is computed **independently for every loaded scan** using the same
 world-space seed coordinates.  This is necessary because different scanners capture
