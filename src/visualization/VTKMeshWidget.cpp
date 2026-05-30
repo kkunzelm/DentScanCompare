@@ -41,11 +41,12 @@ void VTKMeshWidget::buildPipeline()
     m_titleLabel = new QLabel(this);
     m_titleLabel->setAlignment(Qt::AlignCenter);
     m_titleLabel->setStyleSheet("font-weight: bold; font-size: 11px;");
-    layout->addWidget(m_titleLabel);
+    m_titleLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    layout->addWidget(m_titleLabel, 0);   // no stretch — label stays at its natural height
 
     m_vtkWidget = new QVTKOpenGLNativeWidget(this);
     m_vtkWidget->setMinimumSize(280, 280);
-    layout->addWidget(m_vtkWidget);
+    layout->addWidget(m_vtkWidget, 1);    // all extra vertical space goes to the 3-D view
 
     m_renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     m_vtkWidget->setRenderWindow(m_renderWindow);
@@ -508,6 +509,5 @@ void VTKMeshWidget::showToothSegmentation(const std::shared_ptr<ScanData>& scan,
         QString::fromStdString(scan->scannerName) +
         QString(" – %1 tooth vertices").arg(nTooth));
 
-    m_renderer->ResetCamera();
     m_renderWindow->Render();
 }

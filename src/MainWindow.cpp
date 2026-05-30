@@ -355,7 +355,7 @@ void MainWindow::setupTab3Registration()
     m_segStatusLabel->setStyleSheet("color:#555; font-size:10px;");
     ctrlLayout->addRow(m_segStatusLabel);
 
-    m_undoSeedBtn = new QPushButton("↩ Undo Last Seed", ctrlPanel);
+    m_undoSeedBtn = new QPushButton("Undo Last Seed", ctrlPanel);
     m_undoSeedBtn->setEnabled(false);
     m_undoSeedBtn->setToolTip(
         "Remove the most recently placed seed point and re-run segmentation.\n"
@@ -377,7 +377,7 @@ void MainWindow::setupTab3Registration()
     eraseInfo->setWordWrap(true);
     ctrlLayout->addRow(eraseInfo);
 
-    m_eraseBtn = new QPushButton("🧹 Erase Gingiva", ctrlPanel);
+    m_eraseBtn = new QPushButton("Erase Gingiva", ctrlPanel);
     m_eraseBtn->setCheckable(true);
     m_eraseBtn->setChecked(false);
     m_eraseBtn->setToolTip(
@@ -423,7 +423,7 @@ void MainWindow::setupTab3Registration()
     segFileInfo->setWordWrap(true);
     ctrlLayout->addRow(segFileInfo);
 
-    m_saveSegBtn = new QPushButton("💾 Save Segmentation…", ctrlPanel);
+    m_saveSegBtn = new QPushButton("Save Segmentation…", ctrlPanel);
     m_saveSegBtn->setEnabled(false);
     m_saveSegBtn->setToolTip(
         "Save the current seeds, erase zones, and parameters to a .dsc_seg file.\n"
@@ -431,7 +431,7 @@ void MainWindow::setupTab3Registration()
         "Load it later with 'Load Segmentation' to restore the setup.");
     ctrlLayout->addRow(m_saveSegBtn);
 
-    m_loadSegBtn = new QPushButton("📂 Load Segmentation…", ctrlPanel);
+    m_loadSegBtn = new QPushButton("Load Segmentation…", ctrlPanel);
     m_loadSegBtn->setToolTip(
         "Load a previously saved .dsc_seg file.\n"
         "Seeds, erase zones, and parameters are restored and\n"
@@ -560,7 +560,7 @@ void MainWindow::setupTab3Registration()
     });
     connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);  // reuse pick mode for click routing
-        m_eraseBtn->setText(on ? "🛑 Stop Erasing" : "🧹 Erase Gingiva");
+        m_eraseBtn->setText(on ? "Stop Erasing" : "Erase Gingiva");
         if (on && m_pickBtn && m_pickBtn->isChecked())
             m_pickBtn->setChecked(false);
     });
