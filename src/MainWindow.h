@@ -73,6 +73,11 @@ private:
     // Returns a copy of mask with all vertices inside any erase zone set to false.
     std::vector<bool> applyEraseZones(std::vector<bool> mask, const ScanData& scan) const;
 
+    // ---- tooth mask computation ----
+    // Runs one Dijkstra per seed with its tooth-type preset and ORs the results.
+    // Does NOT apply erase zones — caller must do that separately.
+    std::vector<bool> computeToothMask(const ScanData& scan) const;
+
     // ---- segmentation file I/O ----
     void saveSegmentation();
     void loadSegmentation();
@@ -86,6 +91,7 @@ private:
     void updatePlaneVisualization();
     void recomputeMetrics();          // re-run distance+arch steps without re-running ICP
     void runSegmentation();           // re-run tooth segmentation with current params+seeds
+    void clearAllScans();             // discard all loaded scans and reset to empty state
     void recomputeRegistration();     // warm-start ICP using tooth mask, then update metrics
     void updateOverviewTab();
     void updateFingerprintTab();

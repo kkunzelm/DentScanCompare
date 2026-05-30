@@ -251,10 +251,13 @@ void MainWindow::setupUI()
 
 void MainWindow::setupMenuAndToolbar()
 {
-    auto* fileMenu = menuBar()->addMenu("&File");
-    auto* actOpen  = fileMenu->addAction("&Open STL files…");
+    auto* fileMenu  = menuBar()->addMenu("&File");
+    auto* actOpen   = fileMenu->addAction("&Add STL files…");
     actOpen->setShortcut(QKeySequence::Open);
     connect(actOpen, &QAction::triggered, this, &MainWindow::openSTLFiles);
+    auto* actClear  = fileMenu->addAction("&Clear All Scans");
+    actClear->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
+    connect(actClear, &QAction::triggered, this, &MainWindow::clearAllScans);
     fileMenu->addSeparator();
     fileMenu->addAction("&Quit", qApp, &QApplication::quit, QKeySequence::Quit);
 
@@ -270,7 +273,7 @@ void MainWindow::setupMenuAndToolbar()
     // toolbar
     auto* tb = addToolBar("Main");
     tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    auto* tbOpen    = tb->addAction("Open STL", this, &MainWindow::openSTLFiles);
+    auto* tbOpen    = tb->addAction("Add STL", this, &MainWindow::openSTLFiles);
     auto* tbAnalyse = tb->addAction("▶  Run Analysis", this, &MainWindow::runAnalysis);
     auto* tbExport  = tb->addAction("Export…", this, &MainWindow::showExportDialog);
     (void)tbOpen; (void)tbAnalyse; (void)tbExport;
@@ -1013,42 +1016,85 @@ void MainWindow::openSTLFiles()
     const QString lastOpenDir = s.value("lastOpenDir", QDir::homePath()).toString();
 
     QStringList paths = QFileDialog::getOpenFileNames(
-        this, "Open STL files",
+        this, "Add STL files",
         lastOpenDir,
         "STL files (*.stl *.STL);;All files (*)");
     if (paths.isEmpty()) return;
     s.setValue("lastOpenDir", QFileInfo(paths.first()).absolutePath());
 
-    m_scans.clear();
+    // Skip files that are already loaded (compare by absolute path).
+    QStringList newPaths;
+    for (const QString& p : paths) {
+        const std::string sp = QFileInfo(p).absoluteFilePath().toStdString();
+        bool dup = false;
+        for (const auto& existing : m_scans)
+            if (existing->filePath == sp) { dup = true; break; }
+        if (!dup) newPaths << p;
+    }
+    if (newPaths.isEmpty()) {
+        setStatus("All selected files are already loaded.");
+        return;
+    }
+    if (newPaths.size() < paths.size())
+        setStatus(QString("Skipping %1 already-loaded file(s). Loading %2 new…")
+                  .arg(paths.size() - newPaths.size()).arg(newPaths.size()));
+    else
+        setStatus(QString("Loading %1 file(s)…").arg(newPaths.size()));
+
+    // Invalidate previous analysis results — the scan set has changed.
     m_gpaReference.reset();
     m_reports.clear();
-    m_scanList->clear();
     m_fixedRefScanIdx = -1;
     if (m_refGPARadio)   m_refGPARadio->setChecked(true);
     if (m_refFixedLabel) m_refFixedLabel->setText("(select a scan above)");
     if (m_methodCombo)   m_methodCombo->setCurrentIndex(0);
+    if (m_registrationStatus) m_registrationStatus->setText("Not yet run.");
 
-    setStatus(QString("Loading %1 file(s)…").arg(paths.size()));
     m_progress->setValue(0);
     m_progress->show();
 
-    // load in background
-    auto future = QtConcurrent::run([this, paths]() {
-        int loaded = 0;
-        for (const auto& p : paths) {
+    const std::size_t prevCount = m_scans.size();
+    const std::size_t nNew      = static_cast<std::size_t>(newPaths.size());
+
+    auto future = QtConcurrent::run([this, newPaths, prevCount, nNew]() {
+        for (const QString& p : newPaths) {
             std::string err;
             auto scan = STLReader::read(p.toStdString(), err);
             if (scan) {
-                QMetaObject::invokeMethod(this, [this, scan, &loaded, &paths]() {
+                QMetaObject::invokeMethod(this, [this, scan, prevCount, nNew]() {
                     m_scans.push_back(scan);
                     m_progress->setValue(
-                        static_cast<int>(100 * m_scans.size() / paths.size()));
+                        static_cast<int>(100 * (m_scans.size() - prevCount) / nNew));
                 }, Qt::QueuedConnection);
             }
-            ++loaded;
         }
     });
     m_loadWatcher->setFuture(future);
+}
+
+void MainWindow::clearAllScans()
+{
+    if (!m_scans.empty()) {
+        const auto btn = QMessageBox::question(this, "Clear All Scans",
+            QString("Remove all %1 loaded scan(s) and reset the application?")
+                .arg(m_scans.size()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (btn != QMessageBox::Yes) return;
+    }
+    m_scans.clear();
+    m_gpaReference.reset();
+    m_reports.clear();
+    m_fixedRefScanIdx = -1;
+    if (m_refGPARadio)   m_refGPARadio->setChecked(true);
+    if (m_refFixedLabel) m_refFixedLabel->setText("(select a scan above)");
+    if (m_methodCombo)   m_methodCombo->setCurrentIndex(0);
+    if (m_registrationStatus) m_registrationStatus->setText("Not yet run.");
+    clearPickedPoints();
+    rebuildScanWidgets();
+    updateScannerList();
+    updateMethodCombo();
+    updateOverviewTab();
+    setStatus("All scans cleared.");
 }
 
 void MainWindow::onLoadFinished()
@@ -1365,23 +1411,14 @@ void MainWindow::updateDistanceMapsTab()
         maxDist = m_distScaleSpin ? m_distScaleSpin->value() : autoMaxDist;
     }
 
-    // Build per-scan tooth masks when seeds are placed, so the distance maps
-    // grey out gingival tissue and focus colour on the crown area.
     const bool haveMask = !m_pickedPts.empty();
-    ToothSegmentation::Params segParams;
-    if (haveMask) {
-        if (m_segGeodesicSpin) segParams.maxGeodesicMm     = m_segGeodesicSpin->value();
-        if (m_segCreaseSpin)   segParams.maxCreaseAngleDeg = m_segCreaseSpin->value();
-        if (m_segCurvSpin)     segParams.minMeanCurvature  = m_segCurvSpin->value();
-    }
 
-    for (std::size_t i = 0; i < m_scans.size(); ++i) {
+    for (std::size_t i = 0; i < m_distWidgets.size() && i < m_scans.size(); ++i) {
         m_distWidgets[i]->setMesh(m_scans[i]);
         if (!m_scans[i]->distanceComputed) continue;
 
         if (haveMask) {
-            auto mask = ToothSegmentation::segmentFromPoints(
-                *m_scans[i], m_pickedPts, segParams);
+            auto mask = computeToothMask(*m_scans[i]);
             mask = applyEraseZones(mask, *m_scans[i]);
             m_distWidgets[i]->showDistanceMap(m_scans[i], -maxDist, maxDist, mask);
         } else {
@@ -1430,6 +1467,22 @@ void MainWindow::onPointPicked(double x, double y, double z)
     if (m_reregisterBtn) m_reregisterBtn->setEnabled(n >= 1 && !m_scans.empty() && m_gpaReference != nullptr);
 }
 
+std::vector<bool> MainWindow::computeToothMask(const ScanData& scan) const
+{
+    const std::size_t nVerts = scan.mesh.num_vertices();
+    std::vector<bool> mask(nVerts, false);
+    for (int i = 0; i < static_cast<int>(m_pickedPts.size()); ++i) {
+        const int t = (i < static_cast<int>(m_seedTypes.size())) ? m_seedTypes[i] : 0;
+        const ToothSegmentation::Params& p =
+            (t >= 0 && t < static_cast<int>(m_toothPresets.size()))
+            ? m_toothPresets[t].params : ToothSegmentation::Params{};
+        const auto sm = ToothSegmentation::segmentFromPoints(scan, {m_pickedPts[i]}, p);
+        for (std::size_t v = 0; v < nVerts; ++v)
+            mask[v] = mask[v] || sm[v];
+    }
+    return mask;
+}
+
 void MainWindow::runSegmentation()
 {
     const int n = static_cast<int>(m_pickedPts.size());
@@ -1440,21 +1493,7 @@ void MainWindow::runSegmentation()
             [](const auto& a, const auto& b){
                 return a->triangleCount < b->triangleCount; });
 
-        // Run one Dijkstra per seed with its own tooth-type preset, then OR the masks.
-        const std::size_t nVerts = (**refIt).mesh.num_vertices();
-        m_toothMask.assign(nVerts, false);
-        for (int i = 0; i < n; ++i) {
-            const int t = (i < static_cast<int>(m_seedTypes.size()))
-                          ? m_seedTypes[i] : 0;
-            const ToothSegmentation::Params& p =
-                (t >= 0 && t < static_cast<int>(m_toothPresets.size()))
-                ? m_toothPresets[t].params
-                : ToothSegmentation::Params{};
-            const auto seedMask =
-                ToothSegmentation::segmentFromPoints(**refIt, {m_pickedPts[i]}, p);
-            for (std::size_t v = 0; v < nVerts; ++v)
-                m_toothMask[v] = m_toothMask[v] || seedMask[v];
-        }
+        m_toothMask = computeToothMask(**refIt);
 
         auto displayMask = applyEraseZones(m_toothMask, **refIt);
 
@@ -1559,7 +1598,7 @@ void MainWindow::onErasePointPicked(double x, double y, double z)
                     .arg(radius, 0, 'f', 1));
         if (m_overlayWidget)
             m_overlayWidget->showToothSegmentation(*refIt, displayMask);
-        updateDistanceMapsTab();
+        // Distance maps are not re-run here (costly); click Recompute Metrics to update them.
     }
 }
 
@@ -1974,17 +2013,12 @@ void MainWindow::recomputeMetrics()
     const double zWindow = (!haveMask && !plane.active && m_zWindowSpin)
                            ? m_zWindowSpin->value() : 0.0;
 
-    ToothSegmentation::Params segParams;
-    if (m_segGeodesicSpin) segParams.maxGeodesicMm     = m_segGeodesicSpin->value();
-    if (m_segCreaseSpin)   segParams.maxCreaseAngleDeg = m_segCreaseSpin->value();
-    if (m_segCurvSpin)     segParams.minMeanCurvature  = m_segCurvSpin->value();
-
     setStatus("Recomputing metrics…");
     std::size_t totalToothVerts = 0;
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
         std::vector<bool> mask;
         if (haveMask) {
-            mask = ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts, segParams);
+            mask = computeToothMask(*m_scans[i]);
             mask = applyEraseZones(mask, *m_scans[i]);
         }
         DistanceField::fillReport(*m_scans[i], m_reports[i],
