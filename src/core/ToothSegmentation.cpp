@@ -16,9 +16,10 @@ namespace {
 // ── Per-face precomputed geometry ─────────────────────────────────────────────
 
 struct FaceData {
-    Eigen::Vector3d normal;   // outward unit normal
-    Eigen::Vector3d centroid; // face centroid in world space
-    double          meanCurv; // mean κ_H averaged over the 3 vertices
+    Eigen::Vector3d normal;          // outward unit normal
+    Eigen::Vector3d centroid;        // face centroid in world space
+    double          meanCurv;        // mean κ_H averaged over the 3 vertices
+    double          minPrincipalCurv; // κ_min = κ_H − √max(0, κ_H²−κ_G); valley detector
 };
 
 std::vector<FaceData> buildFaceData(const ScanData& scan)
@@ -26,8 +27,10 @@ std::vector<FaceData> buildFaceData(const ScanData& scan)
     const auto& mesh = scan.mesh;
     std::vector<FaceData> fd(mesh.number_of_faces());
 
-    auto curvMapOpt = mesh.property_map<VertexDesc, double>("v:mean_curv");
-    const bool haveCurv = curvMapOpt.has_value();
+    auto curvMapOpt  = mesh.property_map<VertexDesc, double>("v:mean_curv");
+    auto gaussMapOpt = mesh.property_map<VertexDesc, double>("v:gauss_curv");
+    const bool haveCurv  = curvMapOpt.has_value();
+    const bool haveGauss = gaussMapOpt.has_value();
 
     for (auto f : mesh.faces()) {
         auto h = mesh.halfedge(f);
@@ -58,7 +61,21 @@ std::vector<FaceData> buildFaceData(const ScanData& scan)
             kMean = (get(cm, vs[0]) + get(cm, vs[1]) + get(cm, vs[2])) / 3.0;
         }
 
-        fd[f.idx()] = { n, (e0 + e1 + e2) / 3.0, kMean };
+        // κ_min = κ_H − √max(0, κ_H² − κ_G)
+        // More negative than κ_H at saddle-like CEJ geometry (where κ_H is small
+        // but the surface curves strongly concave in one principal direction).
+        // Falls back to κ_H when Gaussian curvature is unavailable or the
+        // discriminant is negative due to floating-point cancellation.
+        double kMin = kMean;
+        if (haveCurv && haveGauss) {
+            const auto& gcm = gaussMapOpt.value();
+            double kGauss = (get(gcm, vs[0]) + get(gcm, vs[1]) + get(gcm, vs[2])) / 3.0;
+            double disc = kMean * kMean - kGauss;
+            if (disc > 0.0)
+                kMin = kMean - std::sqrt(disc);
+        }
+
+        fd[f.idx()] = { n, (e0 + e1 + e2) / 3.0, kMean, kMin };
     }
     return fd;
 }
@@ -169,24 +186,33 @@ std::vector<bool> segment(const ScanData& scan,
         const FaceData& cur = fd[f.idx()];
 
         for (FaceDesc nb : adjacentFaces(mesh, f)) {
-            // ── Primary: geodesic distance limit ────────────────────────────
-            // Cost = centroid-to-centroid distance (cheap, good approximation
-            // for dense meshes like those from intraoral scanners).
             const FaceData& nfd = fd[nb.idx()];
-            double edgeCost = (cur.centroid - nfd.centroid).norm();
+
+            // ── Primary: curvature-weighted geodesic cost ────────────────────
+            // Base cost is centroid-to-centroid physical distance.
+            // Concave faces (negative κ_min) incur an extra multiplicative
+            // penalty so the budget is consumed faster near the CEJ and in
+            // the gingival sulcus, decelerating expansion there naturally.
+            //
+            //   W(f,nb) = dist × (1 + curvatureRepulsion × max(0, −κ_min_avg))
+            //
+            // κ_min is more sensitive than κ_H at saddle-like CEJ geometry and
+            // is computed from both principal curvatures via κ_H and κ_G.
+            // With curvatureRepulsion = 0 this reduces to pure physical distance.
+            double physDist = (cur.centroid - nfd.centroid).norm();
+            double kMinAvg  = (cur.minPrincipalCurv + nfd.minPrincipalCurv) * 0.5;
+            double penalty  = std::max(0.0, -kMinAvg);
+            double edgeCost = physDist * (1.0 + params.curvatureRepulsion * penalty);
             double newDist  = d + edgeCost;
 
             if (newDist > params.maxGeodesicMm) continue;
             if (bestDist[nb.idx()] >= 0.0 && newDist >= bestDist[nb.idx()])
                 continue;
 
-            // ── Secondary: CEJ kink guard ────────────────────────────────────
-            // A sharp crease between adjacent face normals signals the
-            // cementoenamel junction.  This works regardless of tooth
-            // orientation and fires for all tooth types.
+            // ── Secondary hard stops: CEJ kink and gingival sulcus ──────────
+            // These act as safety nets for abrupt transitions that the
+            // curvature-weighted cost alone might not catch quickly enough.
             if (cur.normal.dot(nfd.normal) < cosMaxCrease) continue;
-
-            // ── Secondary: gingival sulcus concavity guard ───────────────────
             if (nfd.meanCurv < params.minMeanCurvature) continue;
 
             bestDist[nb.idx()] = newDist;
