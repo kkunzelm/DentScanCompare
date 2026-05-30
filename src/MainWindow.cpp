@@ -290,7 +290,6 @@ void MainWindow::setupTab3Registration()
     // ── Left: inner tab widget ────────────────────────────────────────────
     auto* innerTabs = new QTabWidget(m_tab3);
     innerTabs->setMinimumWidth(210);
-    innerTabs->setMaximumWidth(420);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Sub-tab 1 – Setup  (ICP / GPA settings + Run Registration)
@@ -710,7 +709,7 @@ void MainWindow::setupTab3Registration()
     splitter->addWidget(m_overlayWidget);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({280, 800});
+    splitter->setSizes({340, 800});
     hlay->addWidget(splitter);
 
     m_tabs->addTab(m_tab3, "Registration");
