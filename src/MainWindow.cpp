@@ -720,16 +720,24 @@ void MainWindow::setupTab3Registration()
     // Signal wiring (all widgets created above — order does not matter here)
     // ═══════════════════════════════════════════════════════════════════════
     connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
+        // Silence the other button before unchecking it so its toggled(false)
+        // does not call setPickMode(false) and overwrite our intended state.
+        if (on && m_eraseBtn && m_eraseBtn->isChecked()) {
+            QSignalBlocker b(m_eraseBtn);
+            m_eraseBtn->setChecked(false);
+            m_eraseBtn->setText("Eraser Tool");
+        }
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
         m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Tooth Seeds");
-        if (on && m_eraseBtn && m_eraseBtn->isChecked())
-            m_eraseBtn->setChecked(false);
     });
     connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (on && m_pickBtn && m_pickBtn->isChecked()) {
+            QSignalBlocker b(m_pickBtn);
+            m_pickBtn->setChecked(false);
+            m_pickBtn->setText("📍 Pick Tooth Seeds");
+        }
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
         m_eraseBtn->setText(on ? "Stop Erasing" : "Eraser Tool");
-        if (on && m_pickBtn && m_pickBtn->isChecked())
-            m_pickBtn->setChecked(false);
     });
     connect(clearEraseBtn, &QPushButton::clicked, this, [this]() {
         m_eraseZones.clear();
