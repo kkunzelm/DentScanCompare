@@ -42,6 +42,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <Eigen/Eigenvalues>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -431,6 +432,23 @@ void MainWindow::setupTab3Registration()
         "Load it later with 'Load Segmentation' to restore the setup.");
     ctrlLayout->addRow(m_saveSegBtn);
 
+    m_exportSubsetBtn = new QPushButton("Export Crown Subset…", ctrlPanel);
+    m_exportSubsetBtn->setEnabled(false);
+    m_exportSubsetBtn->setToolTip(
+        "Save each loaded scan cropped to the bounding box of the\n"
+        "current tooth-crown segmentation.\n"
+        "\n"
+        "All mesh data inside the bounding box is exported — both\n"
+        "segmented crown vertices and surrounding gingival tissue.\n"
+        "Original world-space coordinates are preserved, so the\n"
+        "exported STL and the .dsc_seg segmentation file will align\n"
+        "when loaded together for further analysis.\n"
+        "\n"
+        "Output: one STL per loaded scan, named\n"
+        "'<original_filename>-subset.stl'.\n"
+        "If the file already exists you will be prompted for a new name.");
+    ctrlLayout->addRow(m_exportSubsetBtn);
+
     m_loadSegBtn = new QPushButton("Load Segmentation…", ctrlPanel);
     m_loadSegBtn->setToolTip(
         "Load a previously saved .dsc_seg file.\n"
@@ -608,8 +626,9 @@ void MainWindow::setupTab3Registration()
     });
     connect(m_clearPickBtn, &QPushButton::clicked,
             this, &MainWindow::clearPickedPoints);
-    connect(m_saveSegBtn, &QPushButton::clicked, this, &MainWindow::saveSegmentation);
-    connect(m_loadSegBtn, &QPushButton::clicked, this, &MainWindow::loadSegmentation);
+    connect(m_saveSegBtn,      &QPushButton::clicked, this, &MainWindow::saveSegmentation);
+    connect(m_exportSubsetBtn, &QPushButton::clicked, this, &MainWindow::exportCrownSubset);
+    connect(m_loadSegBtn,      &QPushButton::clicked, this, &MainWindow::loadSegmentation);
     connect(m_recomputeBtn,   &QPushButton::clicked,
             this, &MainWindow::recomputeMetrics);
     connect(m_reregisterBtn,  &QPushButton::clicked,
@@ -1266,8 +1285,9 @@ void MainWindow::onPointPicked(double x, double y, double z)
     }
 
     runSegmentation();
-    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(true);
-    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(true);
+    if (m_undoSeedBtn)      m_undoSeedBtn->setEnabled(true);
+    if (m_saveSegBtn)       m_saveSegBtn->setEnabled(true);
+    if (m_exportSubsetBtn)  m_exportSubsetBtn->setEnabled(true);
     m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
     if (m_reregisterBtn) m_reregisterBtn->setEnabled(n >= 1 && !m_scans.empty() && m_gpaReference != nullptr);
 }
@@ -1336,8 +1356,9 @@ void MainWindow::clearPickedPoints()
     if (m_segStatusLabel) m_segStatusLabel->setText("No seeds placed.");
     if (m_pickCountLabel) m_pickCountLabel->setText("Plane: not fitted yet.");
     if (m_eraseBtn    && m_eraseBtn->isChecked())   m_eraseBtn->setChecked(false);
-    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(false);
-    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(false);
+    if (m_undoSeedBtn)     m_undoSeedBtn->setEnabled(false);
+    if (m_saveSegBtn)      m_saveSegBtn->setEnabled(false);
+    if (m_exportSubsetBtn) m_exportSubsetBtn->setEnabled(false);
     m_recomputeBtn->setEnabled(false);
     if (m_reregisterBtn)  m_reregisterBtn->setEnabled(false);
     if (m_zWindowSpin)    m_zWindowSpin->setEnabled(true);
@@ -1535,8 +1556,9 @@ void MainWindow::loadSegmentation()
             updatePlaneVisualization();
     }
 
-    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(n > 0);
-    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(n > 0);
+    if (m_undoSeedBtn)     m_undoSeedBtn->setEnabled(n > 0);
+    if (m_saveSegBtn)      m_saveSegBtn->setEnabled(n > 0);
+    if (m_exportSubsetBtn) m_exportSubsetBtn->setEnabled(n > 0);
     m_recomputeBtn->setEnabled(n > 0 && !m_scans.empty());
     if (m_reregisterBtn)
         m_reregisterBtn->setEnabled(n > 0 && !m_scans.empty() && m_gpaReference != nullptr);
@@ -1551,6 +1573,146 @@ void MainWindow::loadSegmentation()
     } else {
         if (m_segStatusLabel) m_segStatusLabel->setText("No seeds in file.");
     }
+}
+
+// ── Crown-region STL export ───────────────────────────────────────────────────
+
+void MainWindow::exportCrownSubset()
+{
+    if (m_scans.empty() || m_toothMask.empty()) {
+        QMessageBox::information(this, "No Segmentation",
+            "Place tooth seeds first to define the crown bounding box.");
+        return;
+    }
+
+    // Compute effective mask on the reference scan (Dijkstra + erase zones)
+    auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
+        [](const auto& a, const auto& b){ return a->triangleCount < b->triangleCount; });
+    const auto effectiveMask = applyEraseZones(m_toothMask, **refIt);
+
+    // Compute axis-aligned bounding box of all tooth-mask vertices
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    std::array<double,3> bMin{ kInf,  kInf,  kInf};
+    std::array<double,3> bMax{-kInf, -kInf, -kInf};
+
+    for (auto v : (*refIt)->mesh.vertices()) {
+        if (v.idx() >= effectiveMask.size() || !effectiveMask[v.idx()]) continue;
+        const Point3& p = (*refIt)->mesh.point(v);
+        const double x = CGAL::to_double(p.x());
+        const double y = CGAL::to_double(p.y());
+        const double z = CGAL::to_double(p.z());
+        bMin[0] = std::min(bMin[0], x); bMax[0] = std::max(bMax[0], x);
+        bMin[1] = std::min(bMin[1], y); bMax[1] = std::max(bMax[1], y);
+        bMin[2] = std::min(bMin[2], z); bMax[2] = std::max(bMax[2], z);
+    }
+
+    if (bMin[0] > bMax[0]) {
+        QMessageBox::information(this, "Empty Mask",
+            "The tooth segmentation contains no vertices.");
+        return;
+    }
+
+    // Choose output directory
+    QSettings s("DentScanCompare", "DentScanCompare");
+    const QString lastDir = s.value("lastSubsetDir", QDir::homePath()).toString();
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, "Select output directory for crown-subset STL files", lastDir);
+    if (dir.isEmpty()) return;
+    s.setValue("lastSubsetDir", dir);
+
+    // Export one STL per loaded scan
+    int saved = 0;
+    for (const auto& scan : m_scans) {
+        // Build default output path from original filename
+        const QString stem = QFileInfo(QString::fromStdString(scan->filePath)).baseName();
+        QString outPath = dir + "/" + stem + "-subset.stl";
+
+        // If file already exists, ask for a new name
+        if (QFile::exists(outPath)) {
+            bool ok = false;
+            const QString newStem = QInputDialog::getText(
+                this, "File already exists",
+                QString("'%1-subset.stl' already exists.\n"
+                        "Enter a new file name (without .stl):").arg(stem),
+                QLineEdit::Normal, stem + "-subset", &ok);
+            if (!ok || newStem.trimmed().isEmpty()) continue;
+            outPath = dir + "/" + newStem.trimmed() + ".stl";
+        }
+
+        if (writeBBoxSubsetSTL(*scan, outPath, bMin, bMax))
+            ++saved;
+        else
+            QMessageBox::warning(this, "Export failed",
+                "Could not write:\n" + outPath);
+    }
+
+    if (saved > 0)
+        setStatus(QString("Exported %1 crown-subset STL file%2 to %3")
+            .arg(saved).arg(saved == 1 ? "" : "s")
+            .arg(QFileInfo(dir).fileName()));
+}
+
+bool MainWindow::writeBBoxSubsetSTL(const ScanData& scan,
+                                    const QString& path,
+                                    const std::array<double,3>& bMin,
+                                    const std::array<double,3>& bMax)
+{
+    const auto& mesh = scan.mesh;
+
+    // Collect faces whose centroid lies inside the bounding box
+    std::vector<std::array<Eigen::Vector3f, 3>> selected;
+
+    for (auto f : mesh.faces()) {
+        auto h = mesh.halfedge(f);
+
+        std::array<Eigen::Vector3f, 3> verts;
+        int i = 0;
+        double cx = 0, cy = 0, cz = 0;
+        for (auto vd : mesh.vertices_around_face(h)) {
+            const Point3& p = mesh.point(vd);
+            float x = static_cast<float>(CGAL::to_double(p.x()));
+            float y = static_cast<float>(CGAL::to_double(p.y()));
+            float z = static_cast<float>(CGAL::to_double(p.z()));
+            verts[i++] = Eigen::Vector3f(x, y, z);
+            cx += x; cy += y; cz += z;
+        }
+        if (i != 3) continue;
+        cx /= 3.0; cy /= 3.0; cz /= 3.0;
+
+        if (cx >= bMin[0] && cx <= bMax[0] &&
+            cy >= bMin[1] && cy <= bMax[1] &&
+            cz >= bMin[2] && cz <= bMax[2])
+            selected.push_back(verts);
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+
+    // Binary STL header (80 bytes)
+    QByteArray header(80, '\0');
+    const QByteArray nameBytes = QByteArray::fromStdString(
+        "DentScanCompare crown subset – " + scan.scannerName);
+    header.replace(0, std::min(79, nameBytes.size()), nameBytes.left(79));
+    file.write(header);
+
+    // Face count (4 bytes, little-endian)
+    const quint32 nFaces = static_cast<quint32>(selected.size());
+    file.write(reinterpret_cast<const char*>(&nFaces), 4);
+
+    // Each face: 12-byte normal + 3 × 12-byte vertex + 2-byte attribute = 50 bytes
+    for (const auto& tri : selected) {
+        Eigen::Vector3f n = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+        const float len = n.norm();
+        if (len > 1e-12f) n /= len;
+
+        file.write(reinterpret_cast<const char*>(n.data()), 12);
+        for (const auto& v : tri)
+            file.write(reinterpret_cast<const char*>(v.data()), 12);
+        const quint16 attrib = 0;
+        file.write(reinterpret_cast<const char*>(&attrib), 2);
+    }
+
+    return true;
 }
 
 void MainWindow::fitOcclusalPlane()

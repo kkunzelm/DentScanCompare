@@ -69,6 +69,12 @@ private:
     // ---- segmentation file I/O ----
     void saveSegmentation();
     void loadSegmentation();
+
+    // ---- crown-region STL export ----
+    void exportCrownSubset();
+    static bool writeBBoxSubsetSTL(const ScanData& scan, const QString& path,
+                                   const std::array<double,3>& bMin,
+                                   const std::array<double,3>& bMax);
     void fitOcclusalPlane();        // least-squares plane through m_pickedPts
     void updatePlaneVisualization();
     void recomputeMetrics();          // re-run distance+arch steps without re-running ICP
@@ -124,6 +130,7 @@ private:
     QPushButton*    m_eraseBtn           = nullptr;  // toggle: erase-gingiva mode
     QDoubleSpinBox* m_eraseBrushSpin     = nullptr;  // brush radius [mm]
     QPushButton*    m_saveSegBtn         = nullptr;  // save seeds+zones+params to file
+    QPushButton*    m_exportSubsetBtn    = nullptr;  // export bbox-cropped STL per scan
     QPushButton*    m_loadSegBtn         = nullptr;  // load from file
     QPushButton*    m_recomputeBtn       = nullptr;
     QPushButton*    m_reregisterBtn      = nullptr;  // crown-restricted ICP warm start
