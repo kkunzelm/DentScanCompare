@@ -208,14 +208,17 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
    (not per cusp — one click anywhere on the crown is sufficient).
    **Camera navigation still works in pick mode:** drag to rotate, scroll to zoom.  Only a
    short stationary click (< 6 pixels of mouse movement) registers as a seed point.
+   **Zoom and pan are preserved** when seeds are placed — the view does not reset.
 3. Click **🛑 Stop Picking** when done.  The software immediately runs a curvature-weighted
    Dijkstra region-growing algorithm from each seed point and colours the mesh:
    - **Ivory** = tooth crown (included in metrics)
    - **Dark grey** = gingiva / margins (excluded)
    The status label below the button reports the vertex count of the segmented crown area.
-4. If the segmentation overshoots (gingiva included) or undershoots (parts of crown
-   missing), adjust the segmentation parameters before clicking **📍 Pick Tooth Seeds**
-   again:
+4. **Correct seed mistakes:** click **Undo Last Seed** to remove the most recently placed
+   seed and immediately re-run segmentation.  The button can be pressed repeatedly to step
+   back through seeds one by one.  To remove all seeds at once, click **Clear All Seeds**.
+5. If the segmentation overshoots (gingiva included) or undershoots (parts of crown
+   missing), adjust the segmentation parameters:
 
 | Spinbox | Default | Effect |
 |---------|---------|--------|
@@ -223,12 +226,23 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
 | CEJ crease | 50° | Hard-stop crease angle between adjacent faces.  Decrease (e.g. 35°) to stop earlier at sharp CEJ kinks; increase (e.g. 65°) if the crown has abrupt ridges. |
 | Min curvature | −4 /mm | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 (e.g. −2) to stop earlier; decrease (e.g. −6) if shallow crown concavities are being cut off. |
 
-5. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
+   Segmentation re-runs automatically whenever a spinbox changes (no need to re-place seeds).
+
+6. **Fine-tune with the Gingiva Eraser:** if the segmentation still bleeds onto gingival
+   tissue in isolated spots, click **Erase Gingiva** (turns into **Stop Erasing**), then
+   left-click on each incorrectly included area in the 3-D viewport.  Each click removes
+   all ivory-coloured vertices within the **Brush radius** (default 2 mm) of the click
+   point.  Multiple clicks accumulate.  Click **Stop Erasing** when finished, or click
+   **Clear Erase Zones** to undo all erases and restore the full Dijkstra result.
+   Erase zones are world-space spheres and persist even if you later change a parameter
+   spinbox — the Dijkstra step re-runs but the erase zones are always re-applied on top.
+
+7. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
    segmentation overlay to be restored automatically whenever the registration is updated.
    Uncheck it if you prefer to see the semi-transparent multi-scan overlay instead.
-6. Click **⟳  Recompute Metrics** to refresh distance statistics and the metrics table with
+8. Click **⟳  Recompute Metrics** to refresh distance statistics and the metrics table with
    the new crown mask.
-7. Optionally click **⟳  Recompute Registration** for a crown-restricted ICP refinement
+9. Optionally click **⟳  Recompute Registration** for a crown-restricted ICP refinement
    pass.  This re-runs ICP using only tooth-crown vertices for correspondences (3 mm search
    radius, warm start from the existing alignment), then updates the GPA mean surface and
    recomputes all distance fields.  Typical improvement: 0.02–0.05 mm RMS reduction by
@@ -236,7 +250,13 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
    After the run completes, **⟳  Recompute Metrics** and **⟳  Recompute Registration** are
    re-enabled automatically (if "Keep segmentation after registration" is checked), so you
    can run the cycle again or compare metrics before and after.
-8. If the segmentation is still wrong, click **Clear Seeds** and repeat from step 1.
+10. **Save and reload the segmentation:** click **Save Segmentation…** to write the current
+    seeds, erase zones, and parameter values to a `.dsc_seg` file.  The default filename is
+    `<ReferenceName>_segmentation.dsc_seg` (e.g. `GPA_mean_segmentation.dsc_seg`).  The file
+    records which reference surface the segmentation was built on.  To reload it in a later
+    session, click **Load Segmentation…**, choose the file — seeds, erase zones, and
+    parameters are restored and segmentation re-runs automatically.
+11. If the segmentation is still wrong, click **Clear All Seeds** and repeat from step 1.
 
 The segmentation expands from each seed using a **curvature-weighted geodesic distance**
 as the primary stopping criterion.  Each face-to-face edge costs physical distance ×
@@ -485,9 +505,12 @@ the scanner name.  To ensure correct scanner identification, follow the
 
 ## Important considerations
 
-**Tooth-crown seed points are not saved between sessions.**  If you close the application
-and reopen it, you must re-click the seed points on the mesh.  The segmentation result
-(the ivory/grey overlay) is stored in memory only.
+**Tooth-crown seeds and erase zones can be saved to disk.**  Click **Save Segmentation…**
+in the Registration tab to write a `.dsc_seg` file containing the seed coordinates, erase
+zones, and parameter values.  The default filename includes the reference surface name for
+easy identification.  **Load Segmentation…** restores the full setup and re-runs
+segmentation automatically — so you do not need to re-click seed points when reopening the
+application for the same dataset.
 
 **One seed per tooth crown is sufficient.**  The Dijkstra region-growing algorithm expands
 outward from each seed using geodesic distance (≤ 12 mm surface path from the seed) as
@@ -512,10 +535,12 @@ foreground.  The selected scanner's dots are drawn at full opacity on top of all
 the rest are dimmed.  Click the same entry again to return to the full view.  The
 highlighted state does not affect the ATI table or any statistics.
 
-**Camera navigation works normally in pick mode.**  While **📍 Pick Tooth Seeds** is
-active, drag with the left mouse button to rotate the model, and scroll the mouse wheel to
-zoom.  Only a short stationary click (< 6 pixels of movement) is interpreted as a seed
-placement.  You never need to exit pick mode to re-orient the view.
+**Camera navigation works normally in pick and erase modes.**  While **📍 Pick Tooth Seeds**
+or **Erase Gingiva** is active, drag with the left mouse button to rotate the model and
+scroll the mouse wheel to zoom.  Only a short stationary click (< 6 pixels of movement) is
+interpreted as a seed placement or erase action.  You never need to exit the mode to
+re-orient the view.  **The zoom and pan position are preserved** when seeds are placed or
+parameters change — the viewport does not reset to the default camera position.
 
 **Segmentation is per-scan.**  The seed coordinates are world-space positions on the
 registered meshes.  The same seed points are applied independently to each loaded scan,

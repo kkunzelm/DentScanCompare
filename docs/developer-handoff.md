@@ -217,7 +217,7 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 |-----|---------|
 | Overview | N × VTKMeshWidget (one per loaded scan) in a horizontal-scrolling `QScrollArea`.  Widgets are created by `rebuildScanWidgets()` called from `onLoadFinished()`; each has `setMinimumWidth(240)` so ≤ 5 scans fill the viewport, 6+ trigger the horizontal scrollbar. |
 | Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
-| Registration | Overlay VTKMeshWidget (all scans semi-transparent), RMS status.  Left panel (QScrollArea) contains three sections: (1) **Registration Settings** — method combo (synced from sidebar), ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label, Clear Seeds, Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
+| Registration | Overlay VTKMeshWidget (all scans semi-transparent), RMS status.  Left panel (QScrollArea) contains four sections: (1) **Registration Settings** — method combo (synced from sidebar), ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label (`m_segStatusLabel`), **Undo Last Seed** (`m_undoSeedBtn`, disabled until first seed placed), **Clear All Seeds** (`m_clearPickBtn`), Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Gingiva Eraser** — **Erase Gingiva** toggle (`m_eraseBtn`, mutually exclusive with pick button), Brush radius spinbox (`m_eraseBrushSpin`, 0.5–10 mm, default 2 mm), **Clear Erase Zones** button; (4) **Segmentation File** — **Save Segmentation…** (`m_saveSegBtn`, disabled until seeds exist), **Load Segmentation…** (`m_loadSegBtn`, always enabled); (5) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
 | Distance Maps | N × VTKMeshWidget with diverging colour map (blue–white–red), same scroll behaviour as Overview.  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
@@ -240,14 +240,80 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
   Could be parallelised with `QtConcurrent::map`.
 - CSV export uses UTF-8 BOM for Windows compatibility; column headers contain Unicode
   (κ, °, ²) – these render correctly on Windows with BOM.
-- Tooth segmentation seed points must be placed manually once per session; they are not
-  persisted across restarts.  Automatic seed detection (local Z/κ_H maxima per tooth) would
-  eliminate the manual step.  The seed coordinates are world-space (post-PCA) so they would
-  need to be stored together with the GPA transform to be reusable across sessions.
+- Seeds and erase zones are now saved/loaded via `.dsc_seg` (JSON) files — manual re-clicking
+  across sessions is no longer required.  Automatic seed detection (local Z/κ_H maxima per
+  tooth) would eliminate the initial manual step entirely.
 
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Seed undo, gingiva eraser, segmentation save/load, viewport fixes
+
+**Undo Last Seed** (`m_undoSeedBtn`).  New button added to the Tooth Crown Segmentation
+panel, disabled until the first seed is placed.  `clicked` handler pops `m_pickedPts.back()`,
+calls `m_overlayWidget->showPickSpheres()` and (if ≥ 3 seeds remain) `fitOcclusalPlane()`,
+then calls `runSegmentation()`.  When the last seed is removed it delegates to
+`clearPickedPoints()`.  Button re-enabled state is maintained in `onPointPicked()`,
+`clearPickedPoints()`, and the undo handler itself.
+
+**Gingiva Eraser.**  New UI section in the Registration tab control panel between "Clear All
+Seeds" and "Segmentation Parameters".  Two new members:
+- `QPushButton* m_eraseBtn` (toggle, mutually exclusive with `m_pickBtn` via `toggled` handlers)
+- `QDoubleSpinBox* m_eraseBrushSpin` (0.5–10 mm, default 2 mm)
+
+Both buttons reuse the existing `VTKMeshWidget::setPickMode(bool)` / `pointPicked` signal so
+no new VTK machinery is needed.  `onPointPicked()` checks `m_eraseBtn->isChecked()` at the
+top and routes to `onErasePointPicked(x, y, z)` before the seed-placement logic.
+
+`onErasePointPicked()` appends `{centre, radius}` to
+`std::vector<std::pair<std::array<double,3>, double>> m_eraseZones` (new member), then calls
+`applyEraseZones(m_toothMask, **refIt)` and updates the overlay and distance maps.
+
+`applyEraseZones(mask, scan)` — new const method — iterates all mesh vertices and sets
+`mask[v.idx()] = false` for any vertex whose world-space position falls within any stored
+sphere.  Called in:
+- `runSegmentation()` — applies zones to `m_toothMask` before `showToothSegmentation()`
+- `recomputeMetrics()` — applies zones to each per-scan mask before `fillReport()`
+- `updateDistanceMapsTab()` — applies zones to each per-scan mask before `showDistanceMap()`
+
+`clearPickedPoints()` also clears `m_eraseZones` and resets `m_eraseBtn` to unchecked.
+"Clear Erase Zones" button lambda clears `m_eraseZones` and refreshes the overlay with the
+raw `m_toothMask`.  Key design: `m_toothMask` always stores the **raw Dijkstra result**;
+erase zones are applied on top at every display/metric site — so parameter changes re-run
+Dijkstra from scratch and then re-apply all existing erase zones automatically.
+
+**Segmentation file I/O.**  New members `m_saveSegBtn` / `m_loadSegBtn` and methods
+`saveSegmentation()` / `loadSegmentation()`.  File format: JSON (Qt `QJsonDocument`) with
+extension `.dsc_seg`.  Schema:
+```json
+{
+  "format_version": 1,
+  "reference": "<scannerName or GPA_mean>",
+  "seeds": [[x,y,z], ...],
+  "erase_zones": [{"center":[x,y,z], "radius": r}, ...],
+  "params": {"max_geodesic_mm": 12.0, "max_crease_deg": 50.0, "min_mean_curvature": -4.0}
+}
+```
+Default save path: `<lastSegDir>/<refName>_segmentation.dsc_seg`.  `lastSegDir` persisted
+via `QSettings`.  On load, spinbox values are set with `QSignalBlocker` to prevent premature
+`runSegmentation()` calls; seeds are restored, then `runSegmentation()` is called once.
+`m_saveSegBtn` is disabled until at least one seed is placed.
+
+**Viewport / camera fixes in `VTKMeshWidget`:**
+- `showToothSegmentation()` no longer calls `ResetCamera()`.  Previously every seed placement
+  or parameter change reset the camera to the default position.  The camera set by the last
+  `setOverlayMeshes()` call (triggered at load time) is now preserved across all subsequent
+  segmentation updates.
+- `buildPipeline()`: `m_titleLabel` now has `QSizePolicy::Fixed` vertically and is added to
+  the layout with `stretch=0`; the `QVTKOpenGLNativeWidget` is added with `stretch=1`.
+  Previously both had implicit `stretch=0`, causing Qt to divide vertical space evenly;
+  now the label stays at its natural one-line height and the 3-D viewport fills all remaining
+  vertical space.
+
+**Button text normalisation.**  Emoji glyphs (`↩`, `🧹`, `💾`, `📂`) removed from the Undo,
+Erase, Save, and Load buttons — they rendered as blank boxes on this platform.  The
+pre-existing emoji on Pick Seeds (`📍`/`🛑`) and Recompute (`⟳`) were unaffected.
 
 ### 2026-05-30 – Curvature-weighted edge cost in tooth segmentation (κ_min)
 
