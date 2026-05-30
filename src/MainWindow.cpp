@@ -73,7 +73,7 @@ void MainWindow::setupUI()
 
     // ---- left sidebar ----
     auto* sidebar = new QWidget(central);
-    sidebar->setFixedWidth(200);
+    sidebar->setMinimumWidth(150);
     auto* sideLayout = new QVBoxLayout(sidebar);
     sideLayout->setContentsMargins(4, 4, 4, 4);
 
@@ -98,13 +98,13 @@ void MainWindow::setupUI()
     refLayout->setSpacing(4);
 
     m_refGPARadio = new QRadioButton("GPA mean (all scans)", refGroup);
-    m_refGPARadio->setChecked(true);
     m_refGPARadio->setToolTip(
         "Iterative Generalized Procrustes Analysis:\n"
         "all scans are aligned to the evolving mean surface.\n"
         "No individual scanner is privileged as the reference.");
 
     m_refFixedRadio = new QRadioButton("Fixed reference scan:", refGroup);
+    m_refFixedRadio->setChecked(true);
     m_refFixedRadio->setToolTip(
         "One scan is held fixed as the reference;\n"
         "all others are aligned to it.\n"
@@ -138,8 +138,13 @@ void MainWindow::setupUI()
     setupTab6Export();
     setupTab7About();
 
-    topLayout->addWidget(sidebar);
-    topLayout->addWidget(m_tabs, 1);
+    auto* mainSplitter = new QSplitter(Qt::Horizontal, central);
+    mainSplitter->addWidget(sidebar);
+    mainSplitter->addWidget(m_tabs);
+    mainSplitter->setStretchFactor(0, 0);
+    mainSplitter->setStretchFactor(1, 1);
+    mainSplitter->setSizes({220, 1000});
+    topLayout->addWidget(mainSplitter, 1);
 
     // Wire scanner list → scatter-plot highlight AND (in fixed-ref mode) reference selection.
     connect(m_scanList, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -396,7 +401,7 @@ void MainWindow::setupTab3Registration()
     m_segGeodesicSpin = new QDoubleSpinBox(segPanel);
     m_segGeodesicSpin->setRange(3.0, 25.0);
     m_segGeodesicSpin->setSingleStep(0.5);
-    m_segGeodesicSpin->setValue(12.0);
+    m_segGeodesicSpin->setValue(10.0);
     m_segGeodesicSpin->setSuffix(" mm");
     m_segGeodesicSpin->setToolTip(
         "Maximum surface-path (geodesic) distance from the seed to any\n"
@@ -409,7 +414,7 @@ void MainWindow::setupTab3Registration()
     m_segCreaseSpin = new QDoubleSpinBox(segPanel);
     m_segCreaseSpin->setRange(10.0, 80.0);
     m_segCreaseSpin->setSingleStep(5.0);
-    m_segCreaseSpin->setValue(50.0);
+    m_segCreaseSpin->setValue(35.0);
     m_segCreaseSpin->setSuffix(" °");
     m_segCreaseSpin->setToolTip(
         "Maximum allowed crease angle between adjacent faces.\n"
@@ -423,7 +428,7 @@ void MainWindow::setupTab3Registration()
     m_segCurvSpin = new QDoubleSpinBox(segPanel);
     m_segCurvSpin->setRange(-10.0, 0.0);
     m_segCurvSpin->setSingleStep(0.5);
-    m_segCurvSpin->setValue(-4.0);
+    m_segCurvSpin->setValue(-2.0);
     m_segCurvSpin->setSuffix(" /mm");
     m_segCurvSpin->setToolTip(
         "Minimum mean curvature κ_H a face must have to be included.\n"
@@ -447,7 +452,7 @@ void MainWindow::setupTab3Registration()
     sepErase->setFrameShadow(QFrame::Sunken);
     segForm->addRow(sepErase);
 
-    auto* eraseHeading = new QLabel("<b>Gingiva Eraser</b>", segPanel);
+    auto* eraseHeading = new QLabel("<b>Eraser Tool</b>", segPanel);
     segForm->addRow(eraseHeading);
 
     auto* eraseInfo = new QLabel(
@@ -460,7 +465,7 @@ void MainWindow::setupTab3Registration()
     eraseInfo->setWordWrap(true);
     segForm->addRow(eraseInfo);
 
-    m_eraseBtn = new QPushButton("Erase Gingiva", segPanel);
+    m_eraseBtn = new QPushButton("Eraser Tool", segPanel);
     m_eraseBtn->setCheckable(true);
     m_eraseBtn->setChecked(false);
     m_eraseBtn->setToolTip(
@@ -631,7 +636,7 @@ void MainWindow::setupTab3Registration()
     });
     connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
-        m_eraseBtn->setText(on ? "Stop Erasing" : "Erase Gingiva");
+        m_eraseBtn->setText(on ? "Stop Erasing" : "Eraser Tool");
         if (on && m_pickBtn && m_pickBtn->isChecked())
             m_pickBtn->setChecked(false);
     });
