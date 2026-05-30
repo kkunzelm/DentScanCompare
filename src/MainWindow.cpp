@@ -262,47 +262,61 @@ void MainWindow::setupTab3Registration()
     hlay->setContentsMargins(4, 4, 4, 4);
     hlay->setSpacing(0);
 
-    // left: controls inside a scroll area so the panel is resizable and
-    // all text remains readable even in narrow windows
-    auto* ctrlPanel = new QGroupBox("Registration Settings");
-    ctrlPanel->setMinimumWidth(180);
-    auto* ctrlLayout = new QFormLayout(ctrlPanel);
-    ctrlLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    // ── Helper: wrap a bare QWidget in a scroll area ──────────────────────
+    auto makeScrolled = [](QWidget* panel) -> QScrollArea* {
+        auto* scroll = new QScrollArea;
+        scroll->setWidget(panel);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        return scroll;
+    };
 
-    auto* ctrlScroll = new QScrollArea(m_tab3);
-    ctrlScroll->setWidget(ctrlPanel);
-    ctrlScroll->setWidgetResizable(true);
-    ctrlScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    ctrlScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    ctrlScroll->setMinimumWidth(200);
-    ctrlScroll->setMaximumWidth(400);
+    // ── Helper: create a form panel with consistent margins ───────────────
+    auto makeForm = [](QWidget* parent = nullptr) -> std::pair<QWidget*, QFormLayout*> {
+        auto* w = new QWidget(parent);
+        auto* f = new QFormLayout(w);
+        f->setContentsMargins(8, 8, 8, 8);
+        f->setSpacing(5);
+        f->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        return {w, f};
+    };
 
-    m_methodCombo = new QComboBox(ctrlPanel);
+    // ── Left: inner tab widget ────────────────────────────────────────────
+    auto* innerTabs = new QTabWidget(m_tab3);
+    innerTabs->setMinimumWidth(210);
+    innerTabs->setMaximumWidth(420);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sub-tab 1 – Setup  (ICP / GPA settings + Run Registration)
+    // ═══════════════════════════════════════════════════════════════════════
+    auto [setupPanel, setupForm] = makeForm();
+
+    m_methodCombo = new QComboBox(setupPanel);
     m_methodCombo->addItem("GPA – mean reference (recommended)");
     m_methodCombo->setToolTip(
         "GPA: aligns all scans iteratively and reports distances to the\n"
         "mean surface.  No scanner is privileged as the reference.\n\n"
         "Fixed ref: one scanner is held fixed; all others are aligned to it.\n"
         "Load scans first — the combo is updated with the available names.");
-    ctrlLayout->addRow("Method:", m_methodCombo);
+    setupForm->addRow("Method:", m_methodCombo);
 
-    m_maxIterSpin = new QSpinBox(ctrlPanel);
+    m_maxIterSpin = new QSpinBox(setupPanel);
     m_maxIterSpin->setRange(1, 500);
     m_maxIterSpin->setValue(100);
     m_maxIterSpin->setToolTip("Maximum ICP iterations per scan per GPA cycle.");
-    ctrlLayout->addRow("ICP iterations:", m_maxIterSpin);
+    setupForm->addRow("ICP iterations:", m_maxIterSpin);
 
-    m_sampleSpin = new QSpinBox(ctrlPanel);
+    m_sampleSpin = new QSpinBox(setupPanel);
     m_sampleSpin->setRange(1000, 100000);
     m_sampleSpin->setSingleStep(1000);
     m_sampleSpin->setValue(15000);
     m_sampleSpin->setToolTip(
         "Number of surface points sampled per ICP iteration.\n"
         "More points → more accurate but slower per iteration.");
-    ctrlLayout->addRow("ICP sample pts:", m_sampleSpin);
+    setupForm->addRow("ICP sample pts:", m_sampleSpin);
 
-    // Occlusal zone restriction
-    m_zWindowSpin = new QDoubleSpinBox(ctrlPanel);
+    m_zWindowSpin = new QDoubleSpinBox(setupPanel);
     m_zWindowSpin->setRange(0.0, 30.0);
     m_zWindowSpin->setSingleStep(1.0);
     m_zWindowSpin->setValue(0.0);
@@ -314,33 +328,36 @@ void MainWindow::setupTab3Registration()
         "After PCA, Z+ points toward the occlusal surface; this window\n"
         "captures tooth crowns and excludes gingiva.\n"
         "Recommended: 12 mm.  0 = use all vertices.");
-    ctrlLayout->addRow("Occlusal zone:", m_zWindowSpin);
+    setupForm->addRow("Occlusal zone:", m_zWindowSpin);
 
-    auto* runBtn = new QPushButton("▶  Run Registration", ctrlPanel);
+    auto* runBtn = new QPushButton("▶  Run Registration", setupPanel);
     connect(runBtn, &QPushButton::clicked, this, &MainWindow::runAnalysis);
-    ctrlLayout->addRow(runBtn);
+    setupForm->addRow(runBtn);
 
-    // ── Section separator ─────────────────────────────────────────────────
-    auto* sepLine = new QFrame(ctrlPanel);
-    sepLine->setFrameShape(QFrame::HLine);
-    sepLine->setFrameShadow(QFrame::Sunken);
-    ctrlLayout->addRow(sepLine);
+    m_registrationStatus = new QLabel("Not yet run.", setupPanel);
+    m_registrationStatus->setWordWrap(true);
+    m_registrationStatus->setStyleSheet("color:#555; font-size:10px;");
+    setupForm->addRow(m_registrationStatus);
 
-    // ── Tooth Crown Segmentation (primary ROI tool) ───────────────────────
-    auto* segHeading = new QLabel("<b>Tooth Crown Segmentation</b>", ctrlPanel);
-    ctrlLayout->addRow(segHeading);
+    innerTabs->addTab(makeScrolled(setupPanel), "Setup");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sub-tab 2 – Segmentation  (Dijkstra crown segmentation + erase + file)
+    // ═══════════════════════════════════════════════════════════════════════
+    auto [segPanel, segForm] = makeForm();
 
     auto* segInfo = new QLabel(
-        "Click once on each tooth crown\n"
-        "(cusp tip or incisal edge).\n"
-        "The region-growing algorithm\n"
-        "isolates the full crown automatically.",
-        ctrlPanel);
+        "Click once on the occlusal/incisal\n"
+        "surface of each tooth crown.\n"
+        "The curvature-weighted Dijkstra\n"
+        "algorithm isolates each crown\n"
+        "automatically.",
+        segPanel);
     segInfo->setStyleSheet("color:#555; font-size:10px;");
     segInfo->setWordWrap(true);
-    ctrlLayout->addRow(segInfo);
+    segForm->addRow(segInfo);
 
-    m_pickBtn = new QPushButton("📍 Pick Tooth Seeds", ctrlPanel);
+    m_pickBtn = new QPushButton("📍 Pick Tooth Seeds", segPanel);
     m_pickBtn->setCheckable(true);
     m_pickBtn->setChecked(false);
     m_pickBtn->setToolTip(
@@ -349,115 +366,34 @@ void MainWindow::setupTab3Registration()
         "One click per tooth is enough — place it on the occlusal/\n"
         "incisal surface (cusp tip, central fossa, or incisal edge).\n"
         "Do NOT click on gingiva.");
-    ctrlLayout->addRow(m_pickBtn);
+    segForm->addRow(m_pickBtn);
 
-    m_segStatusLabel = new QLabel("No seeds placed.", ctrlPanel);
+    m_segStatusLabel = new QLabel("No seeds placed.", segPanel);
     m_segStatusLabel->setWordWrap(true);
     m_segStatusLabel->setStyleSheet("color:#555; font-size:10px;");
-    ctrlLayout->addRow(m_segStatusLabel);
+    segForm->addRow(m_segStatusLabel);
 
-    m_undoSeedBtn = new QPushButton("Undo Last Seed", ctrlPanel);
+    m_undoSeedBtn = new QPushButton("Undo Last Seed", segPanel);
     m_undoSeedBtn->setEnabled(false);
     m_undoSeedBtn->setToolTip(
         "Remove the most recently placed seed point and re-run segmentation.\n"
         "Can be pressed repeatedly to undo multiple seeds in reverse order.");
-    ctrlLayout->addRow(m_undoSeedBtn);
+    segForm->addRow(m_undoSeedBtn);
 
-    m_clearPickBtn = new QPushButton("Clear All Seeds", ctrlPanel);
+    m_clearPickBtn = new QPushButton("Clear All Seeds", segPanel);
     m_clearPickBtn->setToolTip("Remove all seed points, erase zones, and reset the segmentation.");
-    ctrlLayout->addRow(m_clearPickBtn);
+    segForm->addRow(m_clearPickBtn);
 
-    // ── Gingiva Eraser ────────────────────────────────────────────────────
-    auto* eraseInfo = new QLabel(
-        "If the segmentation bleeds onto the\n"
-        "gingiva, enable Erase mode and\n"
-        "click on the incorrectly included\n"
-        "area to paint it out.",
-        ctrlPanel);
-    eraseInfo->setStyleSheet("color:#555; font-size:10px;");
-    eraseInfo->setWordWrap(true);
-    ctrlLayout->addRow(eraseInfo);
+    // Segmentation parameters
+    auto* sepParams = new QFrame(segPanel);
+    sepParams->setFrameShape(QFrame::HLine);
+    sepParams->setFrameShadow(QFrame::Sunken);
+    segForm->addRow(sepParams);
 
-    m_eraseBtn = new QPushButton("Erase Gingiva", ctrlPanel);
-    m_eraseBtn->setCheckable(true);
-    m_eraseBtn->setChecked(false);
-    m_eraseBtn->setToolTip(
-        "Enable erase mode, then left-click on any incorrectly\n"
-        "segmented gingival area in the overlay viewport.\n"
-        "Each click removes all vertices within the brush radius\n"
-        "from the tooth mask.  Multiple clicks accumulate.\n"
-        "Erase zones persist when segmentation parameters change.");
-    ctrlLayout->addRow(m_eraseBtn);
+    auto* paramsHeading = new QLabel("<b>Parameters</b>", segPanel);
+    segForm->addRow(paramsHeading);
 
-    m_eraseBrushSpin = new QDoubleSpinBox(ctrlPanel);
-    m_eraseBrushSpin->setRange(0.5, 10.0);
-    m_eraseBrushSpin->setSingleStep(0.5);
-    m_eraseBrushSpin->setValue(2.0);
-    m_eraseBrushSpin->setSuffix(" mm");
-    m_eraseBrushSpin->setToolTip(
-        "Radius of the erase brush in world-space millimetres.\n"
-        "All tooth-mask vertices within this radius of the clicked\n"
-        "point are removed from the segmentation.\n"
-        "Increase for large gingival bleeds; decrease for fine edits.");
-    ctrlLayout->addRow("Brush radius:", m_eraseBrushSpin);
-
-    auto* clearEraseBtn = new QPushButton("Clear Erase Zones", ctrlPanel);
-    clearEraseBtn->setToolTip("Remove all erase zones and restore the full Dijkstra mask.");
-    ctrlLayout->addRow(clearEraseBtn);
-
-    // ── Segmentation file I/O ─────────────────────────────────────────────
-    auto* sepSegFile = new QFrame(ctrlPanel);
-    sepSegFile->setFrameShape(QFrame::HLine);
-    sepSegFile->setFrameShadow(QFrame::Sunken);
-    ctrlLayout->addRow(sepSegFile);
-
-    auto* segFileHeading = new QLabel("<b>Segmentation File</b>", ctrlPanel);
-    ctrlLayout->addRow(segFileHeading);
-
-    auto* segFileInfo = new QLabel(
-        "Save seeds, erase zones, and\n"
-        "parameters to a .dsc_seg file.\n"
-        "The file records the reference\n"
-        "surface name for identification.",
-        ctrlPanel);
-    segFileInfo->setStyleSheet("color:#555; font-size:10px;");
-    segFileInfo->setWordWrap(true);
-    ctrlLayout->addRow(segFileInfo);
-
-    m_saveSegBtn = new QPushButton("Save Segmentation…", ctrlPanel);
-    m_saveSegBtn->setEnabled(false);
-    m_saveSegBtn->setToolTip(
-        "Save the current seeds, erase zones, and parameters to a .dsc_seg file.\n"
-        "The file is named after the reference surface by default.\n"
-        "Load it later with 'Load Segmentation' to restore the setup.");
-    ctrlLayout->addRow(m_saveSegBtn);
-
-    m_exportSubsetBtn = new QPushButton("Export Crown Subset…", ctrlPanel);
-    m_exportSubsetBtn->setEnabled(false);
-    m_exportSubsetBtn->setToolTip(
-        "Save each loaded scan cropped to the bounding box of the\n"
-        "current tooth-crown segmentation.\n"
-        "\n"
-        "All mesh data inside the bounding box is exported — both\n"
-        "segmented crown vertices and surrounding gingival tissue.\n"
-        "Original world-space coordinates are preserved, so the\n"
-        "exported STL and the .dsc_seg segmentation file will align\n"
-        "when loaded together for further analysis.\n"
-        "\n"
-        "Output: one STL per loaded scan, named\n"
-        "'<original_filename>-subset.stl'.\n"
-        "If the file already exists you will be prompted for a new name.");
-    ctrlLayout->addRow(m_exportSubsetBtn);
-
-    m_loadSegBtn = new QPushButton("Load Segmentation…", ctrlPanel);
-    m_loadSegBtn->setToolTip(
-        "Load a previously saved .dsc_seg file.\n"
-        "Seeds, erase zones, and parameters are restored and\n"
-        "segmentation is re-run immediately on the current scans.");
-    ctrlLayout->addRow(m_loadSegBtn);
-
-    // ── Segmentation parameters (tunable live) ───────────────────────────
-    m_segGeodesicSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segGeodesicSpin = new QDoubleSpinBox(segPanel);
     m_segGeodesicSpin->setRange(3.0, 25.0);
     m_segGeodesicSpin->setSingleStep(0.5);
     m_segGeodesicSpin->setValue(12.0);
@@ -468,9 +404,9 @@ void MainWindow::setupTab3Registration()
         "Decrease if the segmentation overshoots onto adjacent teeth or\n"
         "gingiva.  Increase if parts of the crown are missing.\n"
         "Typical range: molars 10–13 mm, incisors 8–11 mm.");
-    ctrlLayout->addRow("Max geodesic:", m_segGeodesicSpin);
+    segForm->addRow("Max geodesic:", m_segGeodesicSpin);
 
-    m_segCreaseSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segCreaseSpin = new QDoubleSpinBox(segPanel);
     m_segCreaseSpin->setRange(10.0, 80.0);
     m_segCreaseSpin->setSingleStep(5.0);
     m_segCreaseSpin->setValue(50.0);
@@ -482,9 +418,9 @@ void MainWindow::setupTab3Registration()
         "exceeds this threshold.\n"
         "Decrease (e.g. 35°) to stop earlier at the CEJ.\n"
         "Increase (e.g. 65°) if the crown surface has local sharp ridges.");
-    ctrlLayout->addRow("CEJ crease:", m_segCreaseSpin);
+    segForm->addRow("CEJ crease:", m_segCreaseSpin);
 
-    m_segCurvSpin = new QDoubleSpinBox(ctrlPanel);
+    m_segCurvSpin = new QDoubleSpinBox(segPanel);
     m_segCurvSpin->setRange(-10.0, 0.0);
     m_segCurvSpin->setSingleStep(0.5);
     m_segCurvSpin->setValue(-4.0);
@@ -496,16 +432,175 @@ void MainWindow::setupTab3Registration()
         "Increase toward 0 (e.g. −2) to stop earlier at concavities.\n"
         "Decrease (e.g. −6) if shallow concavities on the crown are\n"
         "being excluded.  Requires curvature computation to have run.");
-    ctrlLayout->addRow("Min curvature:", m_segCurvSpin);
+    segForm->addRow("Min curvature:", m_segCurvSpin);
 
-    m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", ctrlPanel);
+    m_recomputeBtn = new QPushButton("⟳  Recompute Metrics", segPanel);
     m_recomputeBtn->setToolTip(
         "Re-run distance statistics using the current region of interest.\n"
         "Does NOT re-run ICP registration (fast).");
     m_recomputeBtn->setEnabled(false);
-    ctrlLayout->addRow(m_recomputeBtn);
+    segForm->addRow(m_recomputeBtn);
 
-    m_reregisterBtn = new QPushButton("⟳  Recompute Registration", ctrlPanel);
+    // Gingiva eraser
+    auto* sepErase = new QFrame(segPanel);
+    sepErase->setFrameShape(QFrame::HLine);
+    sepErase->setFrameShadow(QFrame::Sunken);
+    segForm->addRow(sepErase);
+
+    auto* eraseHeading = new QLabel("<b>Gingiva Eraser</b>", segPanel);
+    segForm->addRow(eraseHeading);
+
+    auto* eraseInfo = new QLabel(
+        "If the segmentation bleeds onto\n"
+        "gingiva, enable Erase mode and\n"
+        "click on the incorrectly included\n"
+        "area to paint it out.",
+        segPanel);
+    eraseInfo->setStyleSheet("color:#555; font-size:10px;");
+    eraseInfo->setWordWrap(true);
+    segForm->addRow(eraseInfo);
+
+    m_eraseBtn = new QPushButton("Erase Gingiva", segPanel);
+    m_eraseBtn->setCheckable(true);
+    m_eraseBtn->setChecked(false);
+    m_eraseBtn->setToolTip(
+        "Enable erase mode, then left-click on any incorrectly\n"
+        "segmented gingival area in the overlay viewport.\n"
+        "Each click removes all vertices within the brush radius\n"
+        "from the tooth mask.  Multiple clicks accumulate.\n"
+        "Erase zones persist when segmentation parameters change.");
+    segForm->addRow(m_eraseBtn);
+
+    m_eraseBrushSpin = new QDoubleSpinBox(segPanel);
+    m_eraseBrushSpin->setRange(0.5, 10.0);
+    m_eraseBrushSpin->setSingleStep(0.5);
+    m_eraseBrushSpin->setValue(2.0);
+    m_eraseBrushSpin->setSuffix(" mm");
+    m_eraseBrushSpin->setToolTip(
+        "Radius of the erase brush in world-space millimetres.\n"
+        "All tooth-mask vertices within this radius of the clicked\n"
+        "point are removed from the segmentation.\n"
+        "Increase for large gingival bleeds; decrease for fine edits.");
+    segForm->addRow("Brush radius:", m_eraseBrushSpin);
+
+    auto* clearEraseBtn = new QPushButton("Clear Erase Zones", segPanel);
+    clearEraseBtn->setToolTip("Remove all erase zones and restore the full Dijkstra mask.");
+    segForm->addRow(clearEraseBtn);
+
+    // Segmentation file I/O
+    auto* sepFile = new QFrame(segPanel);
+    sepFile->setFrameShape(QFrame::HLine);
+    sepFile->setFrameShadow(QFrame::Sunken);
+    segForm->addRow(sepFile);
+
+    auto* fileHeading = new QLabel("<b>Segmentation File</b>", segPanel);
+    segForm->addRow(fileHeading);
+
+    m_saveSegBtn = new QPushButton("Save Segmentation…", segPanel);
+    m_saveSegBtn->setEnabled(false);
+    m_saveSegBtn->setToolTip(
+        "Save the current seeds, erase zones, and parameters to a .dsc_seg file.\n"
+        "The file is named after the reference surface by default.\n"
+        "Load it later with 'Load Segmentation' to restore the setup.");
+    segForm->addRow(m_saveSegBtn);
+
+    m_exportSubsetBtn = new QPushButton("Export Crown Subset…", segPanel);
+    m_exportSubsetBtn->setEnabled(false);
+    m_exportSubsetBtn->setToolTip(
+        "Save each loaded scan cropped to the bounding box of the\n"
+        "current tooth-crown segmentation.\n"
+        "All mesh data inside the bounding box is exported — both\n"
+        "segmented crown vertices and surrounding gingival tissue.\n"
+        "Original world-space coordinates are preserved, so the\n"
+        "exported STL and the .dsc_seg segmentation file will align\n"
+        "when loaded together for further analysis.\n"
+        "Output: one STL per loaded scan, named\n"
+        "'<original_filename>-subset.stl'.\n"
+        "If the file already exists you will be prompted for a new name.");
+    segForm->addRow(m_exportSubsetBtn);
+
+    m_loadSegBtn = new QPushButton("Load Segmentation…", segPanel);
+    m_loadSegBtn->setToolTip(
+        "Load a previously saved .dsc_seg file.\n"
+        "Seeds, erase zones, and parameters are restored and\n"
+        "segmentation is re-run immediately on the current scans.");
+    segForm->addRow(m_loadSegBtn);
+
+    innerTabs->addTab(makeScrolled(segPanel), "Segmentation");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sub-tab 3 – Plane  (Occlusal-plane fallback ROI)
+    // ═══════════════════════════════════════════════════════════════════════
+    auto [planePanel, planeForm] = makeForm();
+
+    auto* planeInfo = new QLabel(
+        "Fallback region-of-interest filter\n"
+        "for use when no tooth seeds are\n"
+        "placed.  Fit a plane through ≥ 3\n"
+        "clicked points; the slab below\n"
+        "captures the crown depth.\n\n"
+        "When seeds ARE placed, the\n"
+        "Dijkstra mask takes priority and\n"
+        "these controls are ignored.",
+        planePanel);
+    planeInfo->setStyleSheet("color:#555; font-size:10px;");
+    planeInfo->setWordWrap(true);
+    planeForm->addRow(planeInfo);
+
+    m_planeAboveSpin = new QDoubleSpinBox(planePanel);
+    m_planeAboveSpin->setRange(0.0, 10.0);
+    m_planeAboveSpin->setSingleStep(0.5);
+    m_planeAboveSpin->setValue(2.0);
+    m_planeAboveSpin->setSuffix(" mm");
+    m_planeAboveSpin->setToolTip("Include surface up to this far above the fitted plane.");
+    planeForm->addRow("Above plane:", m_planeAboveSpin);
+
+    m_planeBelowSpin = new QDoubleSpinBox(planePanel);
+    m_planeBelowSpin->setRange(0.0, 20.0);
+    m_planeBelowSpin->setSingleStep(0.5);
+    m_planeBelowSpin->setValue(12.0);
+    m_planeBelowSpin->setSuffix(" mm");
+    m_planeBelowSpin->setToolTip("Include surface up to this far below the fitted plane (full crown height).");
+    planeForm->addRow("Below plane:", m_planeBelowSpin);
+
+    m_pickCountLabel = new QLabel("Plane: not fitted yet.", planePanel);
+    m_pickCountLabel->setStyleSheet("color:#555; font-size:10px;");
+    m_pickCountLabel->setWordWrap(true);
+    planeForm->addRow(m_pickCountLabel);
+
+    m_showPlanesChk = new QCheckBox("Show plane disks", planePanel);
+    m_showPlanesChk->setChecked(false);
+    m_showPlanesChk->setToolTip(
+        "Check to display the three semi-transparent occlusal plane\n"
+        "disks in the viewport (grey = plane, green = above, cyan = below).\n"
+        "The plane is fitted through ≥ 3 seed points placed on any tab.\n"
+        "Uncheck to hide the disks without removing the seed spheres.");
+    planeForm->addRow(m_showPlanesChk);
+
+    innerTabs->addTab(makeScrolled(planePanel), "Plane");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sub-tab 4 – Re-Registration  (crown-restricted ICP warm start)
+    // ═══════════════════════════════════════════════════════════════════════
+    auto [reregPanel, reregForm] = makeForm();
+
+    auto* reregInfo = new QLabel(
+        "Refine the existing registration\n"
+        "using only tooth-crown vertices\n"
+        "as ICP correspondences.\n\n"
+        "Requires: scans registered (Run\n"
+        "Registration) and at least one\n"
+        "tooth seed placed (Segmentation\n"
+        "tab).\n\n"
+        "Typical improvement: 0.02–0.05 mm\n"
+        "RMS by excluding gingival noise\n"
+        "from the ICP objective.",
+        reregPanel);
+    reregInfo->setStyleSheet("color:#555; font-size:10px;");
+    reregInfo->setWordWrap(true);
+    reregForm->addRow(reregInfo);
+
+    m_reregisterBtn = new QPushButton("⟳  Recompute Registration", reregPanel);
     m_reregisterBtn->setToolTip(
         "Re-run point-to-plane ICP for each scan starting from the current\n"
         "alignment (warm start), using only tooth-crown vertices.\n"
@@ -513,63 +608,21 @@ void MainWindow::setupTab3Registration()
         "scan margins that introduce noise.\n"
         "Runs in background — updates Registration, Distance Maps and Metrics.");
     m_reregisterBtn->setEnabled(false);
-    ctrlLayout->addRow(m_reregisterBtn);
+    reregForm->addRow(m_reregisterBtn);
 
-    m_keepSegChk = new QCheckBox("Keep segmentation after registration", ctrlPanel);
+    m_keepSegChk = new QCheckBox("Keep segmentation overlay", reregPanel);
     m_keepSegChk->setChecked(true);
     m_keepSegChk->setToolTip(
         "When checked, the segmentation colour overlay is restored in the\n"
         "Registration viewport after running or recomputing registration.\n"
         "Uncheck to see the semi-transparent multi-scan overlay instead.");
-    ctrlLayout->addRow(m_keepSegChk);
+    reregForm->addRow(m_keepSegChk);
 
-    // ── Occlusal Plane (fallback when no seeds are placed) ────────────────
-    auto* sepLine2 = new QFrame(ctrlPanel);
-    sepLine2->setFrameShape(QFrame::HLine);
-    sepLine2->setFrameShadow(QFrame::Sunken);
-    ctrlLayout->addRow(sepLine2);
+    innerTabs->addTab(makeScrolled(reregPanel), "Re-Registration");
 
-    auto* planeHeading = new QLabel("<b>Occlusal Plane</b> (fallback)", ctrlPanel);
-    planeHeading->setToolTip(
-        "When seed points are placed, the tooth segmentation above takes\n"
-        "priority and these plane controls are ignored.\n"
-        "When no seeds are placed, the plane slab is used as a coarser\n"
-        "region-of-interest filter.\n"
-        "The plane is fitted automatically through the seed points as\n"
-        "soon as 3 or more are placed.");
-    ctrlLayout->addRow(planeHeading);
-
-    m_planeAboveSpin = new QDoubleSpinBox(ctrlPanel);
-    m_planeAboveSpin->setRange(0.0, 10.0);
-    m_planeAboveSpin->setSingleStep(0.5);
-    m_planeAboveSpin->setValue(2.0);
-    m_planeAboveSpin->setSuffix(" mm");
-    m_planeAboveSpin->setToolTip("Include surface up to this far above the fitted plane.");
-    ctrlLayout->addRow("Above plane:", m_planeAboveSpin);
-
-    m_planeBelowSpin = new QDoubleSpinBox(ctrlPanel);
-    m_planeBelowSpin->setRange(0.0, 20.0);
-    m_planeBelowSpin->setSingleStep(0.5);
-    m_planeBelowSpin->setValue(12.0);
-    m_planeBelowSpin->setSuffix(" mm");
-    m_planeBelowSpin->setToolTip("Include surface up to this far below the fitted plane (full crown height).");
-    ctrlLayout->addRow("Below plane:", m_planeBelowSpin);
-
-    m_pickCountLabel = new QLabel("Plane: not fitted yet.", ctrlPanel);
-    m_pickCountLabel->setStyleSheet("color:#555; font-size:10px;");
-    m_pickCountLabel->setWordWrap(true);
-    ctrlLayout->addRow(m_pickCountLabel);
-
-    m_showPlanesChk = new QCheckBox("Show plane disks", ctrlPanel);
-    m_showPlanesChk->setChecked(false);
-    m_showPlanesChk->setToolTip(
-        "Check to compute and display the three semi-transparent occlusal plane\n"
-        "disks (grey = plane, green = above, cyan = below).\n"
-        "The plane is fitted through the seed points when 3 or more are placed.\n"
-        "Uncheck to hide the disks without removing the seed spheres.");
-    ctrlLayout->addRow(m_showPlanesChk);
-
-    // ── wire picking / erasing signals ───────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // Signal wiring (all widgets created above — order does not matter here)
+    // ═══════════════════════════════════════════════════════════════════════
     connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
         m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Tooth Seeds");
@@ -577,7 +630,7 @@ void MainWindow::setupTab3Registration()
             m_eraseBtn->setChecked(false);
     });
     connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_overlayWidget) m_overlayWidget->setPickMode(on);  // reuse pick mode for click routing
+        if (m_overlayWidget) m_overlayWidget->setPickMode(on);
         m_eraseBtn->setText(on ? "Stop Erasing" : "Erase Gingiva");
         if (on && m_pickBtn && m_pickBtn->isChecked())
             m_pickBtn->setChecked(false);
@@ -605,10 +658,7 @@ void MainWindow::setupTab3Registration()
         if (m_pickedPts.empty()) return;
         m_pickedPts.pop_back();
         const int n = static_cast<int>(m_pickedPts.size());
-        if (n == 0) {
-            clearPickedPoints();
-            return;
-        }
+        if (n == 0) { clearPickedPoints(); return; }
         if (m_overlayWidget) m_overlayWidget->showPickSpheres(m_pickedPts);
         if (n >= 3) {
             fitOcclusalPlane();
@@ -624,55 +674,38 @@ void MainWindow::setupTab3Registration()
         m_recomputeBtn->setEnabled(!m_scans.empty());
         if (m_reregisterBtn) m_reregisterBtn->setEnabled(!m_scans.empty() && m_gpaReference != nullptr);
     });
-    connect(m_clearPickBtn, &QPushButton::clicked,
-            this, &MainWindow::clearPickedPoints);
+    connect(m_clearPickBtn,    &QPushButton::clicked, this, &MainWindow::clearPickedPoints);
     connect(m_saveSegBtn,      &QPushButton::clicked, this, &MainWindow::saveSegmentation);
     connect(m_exportSubsetBtn, &QPushButton::clicked, this, &MainWindow::exportCrownSubset);
     connect(m_loadSegBtn,      &QPushButton::clicked, this, &MainWindow::loadSegmentation);
-    connect(m_recomputeBtn,   &QPushButton::clicked,
-            this, &MainWindow::recomputeMetrics);
-    connect(m_reregisterBtn,  &QPushButton::clicked,
-            this, &MainWindow::recomputeRegistration);
-    connect(m_showPlanesChk,  &QCheckBox::toggled, this, [this](bool on) {
+    connect(m_recomputeBtn,    &QPushButton::clicked, this, &MainWindow::recomputeMetrics);
+    connect(m_reregisterBtn,   &QPushButton::clicked, this, &MainWindow::recomputeRegistration);
+    connect(m_showPlanesChk, &QCheckBox::toggled, this, [this](bool on) {
         if (!m_overlayWidget) return;
-        if (on && m_occlusalPlane.active)
-            updatePlaneVisualization();   // create actors now if not yet drawn
-        else
-            m_overlayWidget->setPlanesVisible(false);
+        if (on && m_occlusalPlane.active) updatePlaneVisualization();
+        else m_overlayWidget->setPlanesVisible(false);
     });
     connect(m_planeAboveSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double){
-                if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization();
-            });
+            this, [this](double){ if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization(); });
     connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double){
-                if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization();
-            });
-    // Re-run segmentation live when any parameter spinbox changes
+            this, [this](double){ if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization(); });
     auto reSegment = [this](double){ if (!m_pickedPts.empty()) runSegmentation(); };
-    connect(m_segGeodesicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, reSegment);
-    connect(m_segCreaseSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, reSegment);
-    connect(m_segCurvSpin,     QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, reSegment);
+    connect(m_segGeodesicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
+    connect(m_segCreaseSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
+    connect(m_segCurvSpin,     QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
 
-    m_registrationStatus = new QLabel("Not yet run.", ctrlPanel);
-    m_registrationStatus->setWordWrap(true);
-    ctrlLayout->addRow(m_registrationStatus);
-
-    // right: overlay view
+    // ── Right: full-height overlay viewport ──────────────────────────────
     m_overlayWidget = new VTKMeshWidget(m_tab3);
-    m_overlayWidget->setTitle("Overlay – enable 'Pick Tooth Seeds' then left-click one cusp per tooth");
+    m_overlayWidget->setTitle("Overlay – registered scans");
     connect(m_overlayWidget, &VTKMeshWidget::pointPicked,
             this, &MainWindow::onPointPicked);
 
     auto* splitter = new QSplitter(Qt::Horizontal, m_tab3);
-    splitter->addWidget(ctrlScroll);
+    splitter->addWidget(innerTabs);
     splitter->addWidget(m_overlayWidget);
-    splitter->setStretchFactor(0, 0); // control panel: don't stretch by default
-    splitter->setStretchFactor(1, 1); // overlay: takes all extra space
-    splitter->setSizes({240, 800});
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({280, 800});
     hlay->addWidget(splitter);
 
     m_tabs->addTab(m_tab3, "Registration");
