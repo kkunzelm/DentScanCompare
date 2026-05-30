@@ -125,6 +125,12 @@ in a single dialog.  There is no upper limit on the number of files, but the GPA
 AABB distance computations scale with triangle count; five scans of ~500 k triangles each
 complete in roughly 60–90 seconds on a modern desktop.
 
+**Adding files from different directories.**  Opening the dialog a second time *adds* to
+the existing scan list rather than replacing it.  Duplicate files (same absolute path) are
+silently skipped.  The 3-D viewports in Tab 1 and Tab 4 are rebuilt automatically to match
+the new total count.  To start fresh, use **File → Clear All Scans** (Ctrl+Shift+W), which
+asks for confirmation before discarding all loaded scans, seeds, and erase zones.
+
 The scanner name is extracted from the filename using the convention described in
 [STL file naming convention](#stl-file-naming-convention).  Once loaded, all meshes
 appear in **Tab 1 – Overview** with Phong shading.  The scanner list on the left shows
@@ -217,32 +223,58 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
 
 1. In **Tab 3 – Registration**, find the **Tooth Crown Segmentation** panel and click
    **📍 Pick Tooth Seeds**.  The button turns into **🛑 Stop Picking** while active.
-2. Click once on the **occlusal or incisal surface** of each tooth crown you want to
+2. Before clicking a seed, select the **Tooth type** from the drop-down list.  The available
+   types are:
+
+   | Type | Max geodesic | CEJ crease | Min curvature |
+   |------|-------------|------------|---------------|
+   | Molar | 13 mm | 40° | −3 /mm |
+   | Premolar | 11 mm | 37° | −2.5 /mm |
+   | Canine | 10 mm | 35° | −2 /mm |
+   | Maxillary lateral incisor | 9 mm | 32° | −2 /mm |
+   | Maxillary medial incisor | 9 mm | 30° | −1.5 /mm |
+   | Mandibular incisor | 8 mm | 30° | −1.5 /mm |
+
+   Each seed remembers its own tooth type.  The Dijkstra pass for that seed uses the
+   corresponding parameters.  Changing the type selector before placing a seed has no effect
+   on previously placed seeds.  The parameter spinboxes below the type selector reflect the
+   currently selected type and can be adjusted per-type in-session; the spinbox values update
+   automatically when you switch types.
+
+   **Customising presets.**  Tooth-type defaults are read from `tooth_presets.json` placed
+   next to the application executable (written automatically on first launch if absent).
+   With the recommended out-of-tree build the file is at `build/src/tooth_presets.json`.
+   You can edit it with any text editor to change the defaults permanently; restart the
+   application to pick up the new values.
+
+3. Click once on the **occlusal or incisal surface** of each tooth crown you want to
    include.  A yellow sphere marks each clicked point.  You need one click per tooth crown
    (not per cusp — one click anywhere on the crown is sufficient).
    **Camera navigation still works in pick mode:** drag to rotate, scroll to zoom.  Only a
    short stationary click (< 6 pixels of mouse movement) registers as a seed point.
    **Zoom and pan are preserved** when seeds are placed — the view does not reset.
-3. Click **🛑 Stop Picking** when done.  The software immediately runs a curvature-weighted
-   Dijkstra region-growing algorithm from each seed point and colours the mesh:
+4. Click **🛑 Stop Picking** when done.  The software immediately runs a curvature-weighted
+   Dijkstra region-growing algorithm from each seed point (using that seed's tooth-type
+   parameters) and colours the mesh:
    - **Ivory** = tooth crown (included in metrics)
    - **Dark grey** = gingiva / margins (excluded)
    The status label below the button reports the vertex count of the segmented crown area.
-4. **Correct seed mistakes:** click **Undo Last Seed** to remove the most recently placed
+5. **Correct seed mistakes:** click **Undo Last Seed** to remove the most recently placed
    seed and immediately re-run segmentation.  The button can be pressed repeatedly to step
    back through seeds one by one.  To remove all seeds at once, click **Clear All Seeds**.
-5. If the segmentation overshoots (gingiva included) or undershoots (parts of crown
-   missing), adjust the segmentation parameters:
+6. If the segmentation overshoots (gingiva included) or undershoots (parts of crown
+   missing), adjust the segmentation parameters in the spinboxes below the tooth-type
+   selector.  Changes take effect immediately without re-placing seeds.
 
-| Spinbox | Default | Effect |
-|---------|---------|--------|
-| Max geodesic | 10 mm | Curvature-weighted geodesic budget.  On convex crown surfaces this closely equals physical mm; concave zones (CEJ, gingival sulcus) consume the budget faster.  Decrease if gingiva bleeds in; increase if parts of the crown are cut off. |
-| CEJ crease | 35° | Hard-stop crease angle between adjacent faces.  Decrease to stop earlier at sharp CEJ kinks; increase (e.g. 50–65°) if the crown has abrupt ridges that falsely trigger the stop. |
-| Min curvature | −2 /mm | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 to stop earlier; decrease (e.g. −4 to −6) if shallow crown concavities are being cut off. |
+| Spinbox | Effect |
+|---------|--------|
+| Max geodesic | Curvature-weighted geodesic budget.  On convex crown surfaces this closely equals physical mm; concave zones (CEJ, gingival sulcus) consume the budget faster.  Decrease if gingiva bleeds in; increase if parts of the crown are cut off. |
+| CEJ crease | Hard-stop crease angle between adjacent faces.  Decrease to stop earlier at sharp CEJ kinks; increase (e.g. 50–65°) if the crown has abrupt ridges that falsely trigger the stop. |
+| Min curvature | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 to stop earlier; decrease (e.g. −4 to −6) if shallow crown concavities are being cut off. |
 
    Segmentation re-runs automatically whenever a spinbox changes (no need to re-place seeds).
 
-6. **Fine-tune with the Eraser Tool:** if the segmentation still bleeds onto gingival
+7. **Fine-tune with the Eraser Tool:** if the segmentation still bleeds onto gingival
    tissue in isolated spots, click **Eraser Tool** (turns into **Stop Erasing**), then
    left-click on each incorrectly included area in the 3-D viewport.  Each click removes
    all ivory-coloured vertices within the **Brush radius** (default 2 mm) of the click
@@ -251,32 +283,38 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
    Erase zones are world-space spheres and persist even if you later change a parameter
    spinbox — the Dijkstra step re-runs but the erase zones are always re-applied on top.
 
-7. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
+   **Note:** you can leave **📍 Pick Tooth Seeds** active and click **Eraser Tool** to
+   switch modes in one step — the two modes are mutually exclusive and switching is
+   immediate.  The eraser updates the visual overlay only; distance maps in Tab 4 update
+   when you click **⟳  Recompute Metrics**.
+
+8. Check **Keep segmentation after registration** (default: on) if you want the ivory/grey
    segmentation overlay to be restored automatically whenever the registration is updated.
    Uncheck it if you prefer to see the semi-transparent multi-scan overlay instead.
-8. Click **⟳  Recompute Metrics** to refresh distance statistics and the metrics table with
+9. Click **⟳  Recompute Metrics** to refresh distance statistics and the metrics table with
    the new crown mask.
-9. Optionally click **⟳  Recompute Registration** for a crown-restricted ICP refinement
-   pass.  This re-runs ICP using only tooth-crown vertices for correspondences (3 mm search
-   radius, warm start from the existing alignment), then updates the GPA mean surface and
-   recomputes all distance fields.  Typical improvement: 0.02–0.05 mm RMS reduction by
-   excluding noisy gingival tissue from the ICP objective.
-   After the run completes, **⟳  Recompute Metrics** and **⟳  Recompute Registration** are
-   re-enabled automatically (if "Keep segmentation after registration" is checked), so you
-   can run the cycle again or compare metrics before and after.
-10. **Save and reload the segmentation:** click **Save Segmentation…** to write the current
-    seeds, erase zones, and parameter values to a `.dsc_seg` file.  The default filename is
-    `<ReferenceName>_segmentation.dsc_seg` (e.g. `GPA_mean_segmentation.dsc_seg`).  The file
-    records which reference surface the segmentation was built on.  To reload it in a later
-    session, click **Load Segmentation…**, choose the file — seeds, erase zones, and
-    parameters are restored and segmentation re-runs automatically.
-11. **Export the crown subset STL:** click **Export Crown Subset…** to save each loaded scan
+10. Optionally click **⟳  Recompute Registration** for a crown-restricted ICP refinement
+    pass.  This re-runs ICP using only tooth-crown vertices for correspondences (3 mm search
+    radius, warm start from the existing alignment), then updates the GPA mean surface and
+    recomputes all distance fields.  Typical improvement: 0.02–0.05 mm RMS reduction by
+    excluding noisy gingival tissue from the ICP objective.
+    After the run completes, **⟳  Recompute Metrics** and **⟳  Recompute Registration** are
+    re-enabled automatically (if "Keep segmentation after registration" is checked), so you
+    can run the cycle again or compare metrics before and after.
+11. **Save and reload the segmentation:** click **Save Segmentation…** to write the current
+    seeds (including their tooth types), erase zones, and parameter values to a `.dsc_seg`
+    file.  The default filename is `<ReferenceName>_segmentation.dsc_seg` (e.g.
+    `GPA_mean_segmentation.dsc_seg`).  The file records which reference surface the
+    segmentation was built on.  To reload it in a later session, click **Load Segmentation…**,
+    choose the file — seeds (with tooth types), erase zones, and parameters are restored and
+    segmentation re-runs automatically.
+12. **Export the crown subset STL:** click **Export Crown Subset…** to save each loaded scan
     trimmed to the bounding box of the active tooth mask.  One binary STL file per scanner is
     written to a chosen directory; each file is named `<original_stem>-subset.stl`.  All
     subset files share the same axis-aligned bounding box (derived from the reference scan's
     effective mask), so they are already co-registered when loaded into another tool.
     If a file with that name already exists you will be asked to provide a new name.
-12. If the segmentation is still wrong, click **Clear All Seeds** and repeat from step 1.
+13. If the segmentation is still wrong, click **Clear All Seeds** and repeat from step 1.
 
 The segmentation expands from each seed using a **curvature-weighted geodesic distance**
 as the primary stopping criterion.  Each face-to-face edge costs physical distance ×
@@ -284,8 +322,8 @@ as the primary stopping criterion.  Each face-to-face edge costs physical distan
 curvature κ_min = κ_H − √(κ_H²−κ_G).  This makes the budget consumed faster in
 concave regions (CEJ saddle zone, gingival sulcus), so expansion decelerates naturally
 at the tooth-gum margin — even before the two hard-stop safety nets fire:
-a crease-angle check (≥ 35° kink between face normals signals the CEJ) and
-a curvature floor (mean κ_H > −2 mm⁻¹ rejects the gingival sulcus).
+a crease-angle check (≥ crease threshold kink between face normals signals the CEJ) and
+a curvature floor (mean κ_H > min-curvature threshold rejects the gingival sulcus).
 
 The segmentation is computed **independently for every loaded scan** using the same
 world-space seed coordinates.  This is necessary because different scanners capture
@@ -556,11 +594,29 @@ the rest are dimmed.  Click the same entry again to return to the full view.  Th
 highlighted state does not affect the ATI table or any statistics.
 
 **Camera navigation works normally in pick and erase modes.**  While **📍 Pick Tooth Seeds**
-or **Erase Gingiva** is active, drag with the left mouse button to rotate the model and
+or **Eraser Tool** is active, drag with the left mouse button to rotate the model and
 scroll the mouse wheel to zoom.  Only a short stationary click (< 6 pixels of movement) is
 interpreted as a seed placement or erase action.  You never need to exit the mode to
 re-orient the view.  **The zoom and pan position are preserved** when seeds are placed or
 parameters change — the viewport does not reset to the default camera position.
+
+**Pick Seeds and Eraser Tool are mutually exclusive.**  Clicking **Eraser Tool** while
+**📍 Pick Tooth Seeds** is active immediately deactivates seed picking and activates erasing
+in one step — no need to click Stop Picking first.  The same applies in reverse.
+
+**Erase zones only update the visual overlay, not the distance maps.**  Erasing is fast
+(no Dijkstra re-run); the distance maps in Tab 4 and the metrics in Tab 5 are updated only
+when you click **⟳  Recompute Metrics**.
+
+**Incremental STL loading.**  Opening STL files a second time *adds* files to the current
+session rather than replacing them.  Use **File → Clear All Scans** (Ctrl+Shift+W) to
+discard everything and start fresh.  The reference-surface selection resets to GPA mean
+after Clear All Scans.
+
+**Each seed uses its own tooth-type preset.**  When a seed is placed, the currently selected
+tooth type is stored with that seed.  Changing the type selector afterward does not
+retroactively update already-placed seeds.  Undo Last Seed and re-place with the correct
+type if you made a wrong choice.
 
 **Segmentation is per-scan.**  The seed coordinates are world-space positions on the
 registered meshes.  The same seed points are applied independently to each loaded scan,
@@ -573,10 +629,10 @@ opened STL files from and the last export directory in your user settings
 (QSettings, application "DentScanCompare").  These are restored automatically the next
 time you open the file dialog or the export dialog.
 
-**Reference mode resets when new files are loaded.**  Whenever you open a new set of STL
-files, the reference-surface selector in the sidebar automatically returns to "GPA mean
-(all scans)".  If you want to use a fixed reference, re-select it from the Loaded Scans
-list after loading.
+**Reference mode resets when new files are loaded or when Clear All Scans is used.**
+Whenever you load additional STL files or clear the scan list, the reference-surface
+selector in the sidebar automatically returns to "GPA mean (all scans)".  If you want to
+use a fixed reference, re-select it from the Loaded Scans list afterward.
 
 **GPA is self-referential.**  The mean reference surface is the centroid of all loaded
 scans.  Adding or removing a scan changes the reference, which changes the distance

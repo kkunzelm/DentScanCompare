@@ -44,7 +44,8 @@ the configure step fails.
 ```
 src/
 ├── main.cpp
-├── MainWindow.{h,cpp}         Qt main window, 6 tabs, async analysis pipeline
+├── MainWindow.{h,cpp}         Qt main window, 7 tabs, async analysis pipeline
+├── tooth_presets.json          Written next to executable on first launch (via loadToothPresets())
 ├── core/
 │   ├── Mesh.h                 SurfaceMesh type aliases + ScanData struct
 │   ├── MetricReport.h         Plain metric aggregate struct (no logic)
@@ -175,6 +176,15 @@ Primescan exports triangles wound opposite to the other four scanners.
 determine the absolute outward direction for open meshes (dental arches are open).
 The fix is in `STLReader.cpp`: per-face cross-product check against the stored STL normal.
 
+### Mutually-exclusive checkable buttons and QSignalBlocker
+
+Two checkable buttons that are meant to be mutually exclusive (`m_pickBtn` / `m_eraseBtn`)
+each call `m_overlayWidget->setPickMode(bool)` in their `toggled` handler.  If button A is
+checked and you programmatically uncheck button B from within A's handler, Qt immediately
+fires B's `toggled(false)`, which calls `setPickMode(false)` — overwriting the `setPickMode(true)`
+that A's handler just set.  Wrap the programmatic `setChecked` in `QSignalBlocker(buttonB)`
+to suppress the cascade.  See the 2026-05-30 changelog entry for the full code pattern.
+
 ### GPA reference = Primescan problem
 
 Before Option B was implemented, the GPA reference was a static copy of Primescan
@@ -217,7 +227,7 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 |-----|---------|
 | Overview | N × VTKMeshWidget (one per loaded scan) in a horizontal-scrolling `QScrollArea`.  Widgets are created by `rebuildScanWidgets()` called from `onLoadFinished()`; each has `setMinimumWidth(240)` so ≤ 5 scans fill the viewport, 6+ trigger the horizontal scrollbar. |
 | Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
-| Registration | Single `VTKMeshWidget m_overlayWidget` on the right (all scans semi-transparent, or tooth-segmentation overlay).  Left side: embedded `QTabWidget innerTabs` (min 210, max 420 px) with four sub-tabs, inside a `QSplitter` (sizes {280, 800}):<br>**Setup** — method combo (synced from sidebar), `m_maxIterSpin`, `m_sampleSpin`, `m_zWindowSpin`, Run Analysis button, `m_registrationStatus` label.<br>**Segmentation** — `m_pickBtn` (📍/🛑), `m_segStatusLabel`, `m_undoSeedBtn` (disabled until first seed), `m_clearPickBtn`, Max geodesic (default 10 mm) / CEJ crease (default 35°) / Min curvature (default −2 /mm) spinboxes, `m_recomputeBtn`; **Eraser Tool** section: `m_eraseBtn` toggle (label "Eraser Tool" / "Stop Erasing", mutually exclusive with pickBtn), `m_eraseBrushSpin` (0.5–10 mm, default 2 mm), Clear Erase Zones; **Segmentation File** section: `m_saveSegBtn` (disabled until seeds exist), `m_exportSubsetBtn` (Export Crown Subset…), `m_loadSegBtn`.<br>**Plane** — `m_planeAboveSpin`, `m_planeBelowSpin`, `m_pickCountLabel`, `m_showPlanesChk` (starts unchecked).<br>**Re-Registration** — `m_reregisterBtn` (crown-restricted ICP warm-start), `m_keepSegChk` (default checked). |
+| Registration | Single `VTKMeshWidget m_overlayWidget` on the right (all scans semi-transparent, or tooth-segmentation overlay).  Left side: embedded `QTabWidget innerTabs` (no max-width cap) with four sub-tabs, inside a `QSplitter` (sizes {280, 800}):<br>**Setup** — method combo (synced from sidebar), `m_maxIterSpin`, `m_sampleSpin`, `m_zWindowSpin`, Run Analysis button, `m_registrationStatus` label.<br>**Segmentation** — `m_pickBtn` (📍/🛑), `m_toothTypeCombo` (preset selector for next seed), `m_segStatusLabel`, `m_undoSeedBtn` (disabled until first seed), `m_clearPickBtn`, `m_segGeodesicSpin` (default 10 mm) / `m_segCreaseSpin` (default 35°) / `m_segCurvSpin` (default −2 /mm) spinboxes (reflect currently selected tooth type, update on combo change), `m_recomputeBtn`; **Eraser Tool** section: `m_eraseBtn` toggle (label "Eraser Tool" / "Stop Erasing", mutually exclusive with pickBtn via `QSignalBlocker` — see pitfalls), `m_eraseBrushSpin` (0.5–10 mm, default 2 mm), Clear Erase Zones; **Segmentation File** section: `m_saveSegBtn` (disabled until seeds exist), `m_exportSubsetBtn` (Export Crown Subset…), `m_loadSegBtn`.<br>**Plane** — `m_planeAboveSpin`, `m_planeBelowSpin`, `m_pickCountLabel`, `m_showPlanesChk` (starts unchecked).<br>**Re-Registration** — `m_reregisterBtn` (crown-restricted ICP warm-start), `m_keepSegChk` (default checked). |
 | Distance Maps | N × VTKMeshWidget with diverging colour map (blue–white–red), same scroll behaviour as Overview.  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
@@ -247,6 +257,95 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Per-seed tooth-type presets, incremental STL loading, eraser fixes
+
+**Per-seed tooth-type presets.**  Each seed point now stores its own tooth type via a
+parallel `std::vector<int> m_seedTypes` (index into `m_toothPresets`).  A new
+`QComboBox* m_toothTypeCombo` appears in the Segmentation sub-tab; the currently selected
+type is stored when a seed is placed.  New `struct MainWindow::ToothPreset { QString name;
+ToothSegmentation::Params params; }` and `std::vector<ToothPreset> m_toothPresets` hold
+all presets at runtime.
+
+`loadToothPresets()` reads `tooth_presets.json` from `QApplication::applicationDirPath()`
+(i.e. next to the executable — `build/src/tooth_presets.json` for the standard out-of-tree
+build).  If absent or unparseable, the file is written with six built-in defaults:
+
+| Name | max_geodesic_mm | max_crease_deg | min_mean_curvature |
+|------|----------------|----------------|-------------------|
+| Molar | 13 | 40 | −3 |
+| Premolar | 11 | 37 | −2.5 |
+| Canine | 10 | 35 | −2 |
+| Maxillary lateral incisor | 9 | 32 | −2 |
+| Maxillary medial incisor | 9 | 30 | −1.5 |
+| Mandibular incisor | 8 | 30 | −1.5 |
+
+New helper `computeToothMask(const ScanData& scan) const` centralises per-seed Dijkstra:
+iterates `m_pickedPts`, calls `ToothSegmentation::segmentFromPoints` for each seed with its
+type's `Params`, ORs the resulting `std::vector<bool>` masks, and returns the union.  All
+three callers that previously ran their own segmentation loop now call this helper:
+`runSegmentation()`, `updateDistanceMapsTab()`, `recomputeMetrics()`.
+
+The Segmentation sub-tab parameter spinboxes now show the currently selected tooth type's
+values and update automatically when the type combo changes (using `QSignalBlocker` to
+suppress premature `runSegmentation()` during the update).  A dynamic "Parameters for:
+<type>" heading keeps the UI context clear.
+
+`.dsc_seg` file format bumped to version 2 — adds `seed_types` and `presets` arrays.
+V1 files load cleanly (all seeds default to Molar).
+
+**Incremental STL loading.**  `openSTLFiles()` now *appends* to `m_scans` rather than
+replacing it.  Duplicate detection: each candidate absolute path is compared against
+`existing->filePath`; duplicates are silently skipped.  When new files are added, the
+previous GPA reference (`m_gpaReference`) and reports (`m_reports`) are invalidated
+(reset to nullptr/empty) because the scan set changed.  Progress reporting uses
+`(m_scans.size() - prevCount) / nNew`.  After loading, `rebuildScanWidgets()` rebuilds
+Tab 1 and Tab 4 viewports for the new total count.
+
+New method `clearAllScans()`: shows a `QMessageBox::question` confirmation, then clears
+`m_scans`, `m_gpaReference`, `m_reports`, calls `clearPickedPoints()` and
+`rebuildScanWidgets()`, resets reference-surface radio to GPA.  Wired to
+**File → Clear All Scans** (Ctrl+Shift+W).
+
+**Eraser performance fix.**  `onErasePointPicked()` previously called `updateDistanceMapsTab()`,
+which re-ran `computeToothMask()` (N seeds × Dijkstra) for every loaded scan on every erase
+click — O(seeds × scans) Dijkstra passes per click.  Fix: `updateDistanceMapsTab()` removed
+from `onErasePointPicked()`.  The eraser now only updates the overlay widget (fast vertex-
+colour pass).  Tab 4 and Tab 5 update on the next explicit **⟳  Recompute Metrics** click.
+
+**Eraser first-use bug — `QSignalBlocker` fix.**  When **📍 Pick Tooth Seeds** is active
+and the user clicks **Eraser Tool**, the signal cascade was:
+1. `eraseBtn::toggled(true)` → handler calls `setPickMode(true)` (correct)
+2. Handler programmatically unchecks `m_pickBtn`
+3. `pickBtn::toggled(false)` fires → handler calls `setPickMode(false)` (overwrites step 1!)
+
+Fix: wrap the programmatic `setChecked` in `QSignalBlocker` so step 3 is suppressed.
+Both `toggled` handlers updated symmetrically:
+
+```cpp
+connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
+    if (on && m_eraseBtn && m_eraseBtn->isChecked()) {
+        QSignalBlocker b(m_eraseBtn);
+        m_eraseBtn->setChecked(false);
+        m_eraseBtn->setText("Eraser Tool");
+    }
+    if (m_overlayWidget) m_overlayWidget->setPickMode(on);
+    m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Tooth Seeds");
+});
+connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
+    if (on && m_pickBtn && m_pickBtn->isChecked()) {
+        QSignalBlocker b(m_pickBtn);
+        m_pickBtn->setChecked(false);
+        m_pickBtn->setText("📍 Pick Tooth Seeds");
+    }
+    if (m_overlayWidget) m_overlayWidget->setPickMode(on);
+    m_eraseBtn->setText(on ? "Stop Erasing" : "Eraser Tool");
+});
+```
+
+The pattern applies to any pair of mutually-exclusive checkable buttons that each call a
+shared setter in their `toggled` handler — always use `QSignalBlocker` on the button you
+programmatically uncheck.
 
 ### 2026-05-30 – Scalable sidebar, fixed-ref default, new segmentation defaults, Eraser Tool rename
 
@@ -344,19 +443,26 @@ Dijkstra from scratch and then re-apply all existing erase zones automatically.
 
 **Segmentation file I/O.**  New members `m_saveSegBtn` / `m_loadSegBtn` and methods
 `saveSegmentation()` / `loadSegmentation()`.  File format: JSON (Qt `QJsonDocument`) with
-extension `.dsc_seg`.  Schema:
+extension `.dsc_seg`.  Current schema (format_version 2):
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "reference": "<scannerName or GPA_mean>",
   "seeds": [[x,y,z], ...],
+  "seed_types": ["Molar", "Premolar", ...],
   "erase_zones": [{"center":[x,y,z], "radius": r}, ...],
-  "params": {"max_geodesic_mm": 12.0, "max_crease_deg": 50.0, "min_mean_curvature": -4.0}
+  "params": {"max_geodesic_mm": 10.0, "max_crease_deg": 35.0, "min_mean_curvature": -2.0},
+  "presets": [{"name":"Molar","max_geodesic_mm":13,...}, ...]
 }
 ```
-Default save path: `<lastSegDir>/<refName>_segmentation.dsc_seg`.  `lastSegDir` persisted
-via `QSettings`.  On load, spinbox values are set with `QSignalBlocker` to prevent premature
-`runSegmentation()` calls; seeds are restored, then `runSegmentation()` is called once.
+`seed_types` is a parallel array to `seeds` — each entry is a preset name string.  On load,
+the name is looked up in `m_toothPresets`; if not found, the seed defaults to index 0 (Molar).
+`presets` snapshots the in-session preset values so the round-trip is exact even if the user
+edited spinboxes.  **Backward compatibility:** v1 files (no `seed_types` / `presets`) load
+cleanly; all seeds default to index 0 (Molar).  Default save path:
+`<lastSegDir>/<refName>_segmentation.dsc_seg`.  `lastSegDir` persisted via `QSettings`.
+On load, spinbox values are set with `QSignalBlocker` to prevent premature `runSegmentation()`
+calls; seeds and types are restored, then `runSegmentation()` is called once.
 `m_saveSegBtn` is disabled until at least one seed is placed.
 
 **Viewport / camera fixes in `VTKMeshWidget`:**
