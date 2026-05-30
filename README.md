@@ -183,7 +183,17 @@ below the radio button confirms the name.  Loading new STL files resets to GPA m
 
 #### Registration parameters (Tab 3 – Registration)
 
-The **"Registration Settings"** panel in Tab 3 exposes ICP tuning options:
+Tab 3 organises its controls in four sub-tabs on the left; the 3-D overlay viewport
+occupies the right side throughout.
+
+| Sub-tab | Contents |
+|---------|----------|
+| **Setup** | Method combo (synced from sidebar), Max ICP iterations, Sample points, Occlusal zone Z-window, Run Analysis button |
+| **Segmentation** | Seed picking, Undo Last Seed, Clear All Seeds, Dijkstra parameters, Recompute Metrics, Gingiva Eraser, Save/Export/Load segmentation |
+| **Plane** | Above / Below plane spinboxes, plane-point count label, Show plane disks checkbox |
+| **Re-Registration** | Crown-restricted ICP warm-start button, Keep-segmentation checkbox |
+
+The **"Setup"** sub-tab exposes the core ICP tuning options:
 
 | Control | Default | Meaning |
 |---------|---------|---------|
@@ -256,7 +266,13 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
     records which reference surface the segmentation was built on.  To reload it in a later
     session, click **Load Segmentation…**, choose the file — seeds, erase zones, and
     parameters are restored and segmentation re-runs automatically.
-11. If the segmentation is still wrong, click **Clear All Seeds** and repeat from step 1.
+11. **Export the crown subset STL:** click **Export Crown Subset…** to save each loaded scan
+    trimmed to the bounding box of the active tooth mask.  One binary STL file per scanner is
+    written to a chosen directory; each file is named `<original_stem>-subset.stl`.  All
+    subset files share the same axis-aligned bounding box (derived from the reference scan's
+    effective mask), so they are already co-registered when loaded into another tool.
+    If a file with that name already exists you will be asked to provide a new name.
+12. If the segmentation is still wrong, click **Clear All Seeds** and repeat from step 1.
 
 The segmentation expands from each seed using a **curvature-weighted geodesic distance**
 as the primary stopping criterion.  Each face-to-face edge costs physical distance ×

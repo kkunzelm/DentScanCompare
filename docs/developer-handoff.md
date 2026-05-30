@@ -217,7 +217,7 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 |-----|---------|
 | Overview | N × VTKMeshWidget (one per loaded scan) in a horizontal-scrolling `QScrollArea`.  Widgets are created by `rebuildScanWidgets()` called from `onLoadFinished()`; each has `setMinimumWidth(240)` so ≤ 5 scans fill the viewport, 6+ trigger the horizontal scrollbar. |
 | Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
-| Registration | Overlay VTKMeshWidget (all scans semi-transparent), RMS status.  Left panel (QScrollArea) contains four sections: (1) **Registration Settings** — method combo (synced from sidebar), ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label (`m_segStatusLabel`), **Undo Last Seed** (`m_undoSeedBtn`, disabled until first seed placed), **Clear All Seeds** (`m_clearPickBtn`), Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Gingiva Eraser** — **Erase Gingiva** toggle (`m_eraseBtn`, mutually exclusive with pick button), Brush radius spinbox (`m_eraseBrushSpin`, 0.5–10 mm, default 2 mm), **Clear Erase Zones** button; (4) **Segmentation File** — **Save Segmentation…** (`m_saveSegBtn`, disabled until seeds exist), **Load Segmentation…** (`m_loadSegBtn`, always enabled); (5) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
+| Registration | Single `VTKMeshWidget m_overlayWidget` on the right (all scans semi-transparent, or tooth-segmentation overlay).  Left side: embedded `QTabWidget innerTabs` (min 210, max 420 px) with four sub-tabs, inside a `QSplitter` (sizes {280, 800}):<br>**Setup** — method combo (synced from sidebar), `m_maxIterSpin`, `m_sampleSpin`, `m_zWindowSpin`, Run Analysis button, `m_registrationStatus` label.<br>**Segmentation** — `m_pickBtn` (📍/🛑), `m_segStatusLabel`, `m_undoSeedBtn` (disabled until first seed), `m_clearPickBtn`, Max geodesic / CEJ crease / Min curvature spinboxes, `m_recomputeBtn`; **Gingiva Eraser** section: `m_eraseBtn` toggle (mutually exclusive with pickBtn), `m_eraseBrushSpin` (0.5–10 mm, default 2 mm), Clear Erase Zones; **Segmentation File** section: `m_saveSegBtn` (disabled until seeds exist), `m_exportSubsetBtn` (Export Crown Subset…), `m_loadSegBtn`.<br>**Plane** — `m_planeAboveSpin`, `m_planeBelowSpin`, `m_pickCountLabel`, `m_showPlanesChk` (starts unchecked).<br>**Re-Registration** — `m_reregisterBtn` (crown-restricted ICP warm-start), `m_keepSegChk` (default checked). |
 | Distance Maps | N × VTKMeshWidget with diverging colour map (blue–white–red), same scroll behaviour as Overview.  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
@@ -247,6 +247,43 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Export Crown Subset + Registration tab split into four sub-tabs
+
+**Export Crown Subset** (`m_exportSubsetBtn`, "Export Crown Subset…").  New button in the
+**Segmentation** sub-tab (below "Save Segmentation…").  `exportCrownSubset()` implementation:
+
+1. Finds the reference scan iterator.  Computes the effective mask (`applyEraseZones(m_toothMask, *ref)`) and derives its axis-aligned bounding box from the world-space positions of all `true` vertices.
+2. Prompts the user for an output directory via `QFileDialog::getExistingDirectory`.
+3. Iterates `m_scans`.  For each scan, calls `writeBBoxSubsetSTL(scan, outPath, bMin, bMax)`:
+   - Includes a face if its centroid lies inside the bbox.
+   - Writes binary STL: 80-byte header, `quint32` face count, then per-face: 12-byte normal (cross-product of edges), 3 × 12-byte vertices, 2-byte attribute (`quint16` 0).
+4. If `<stem>-subset.stl` already exists, asks the user for an alternative name via `QInputDialog::getText`.
+
+The bounding box is computed from the **reference scan only** but applied to **all scans** (they share the same coordinate frame post-GPA registration), so all subset files can be loaded together into a third-party tool and remain correctly aligned.
+
+**Registration tab split.**  The single `QScrollArea` control panel was replaced by an embedded
+`QTabWidget` with four sub-tabs.  Only the left panel changed — the single `m_overlayWidget`
+(VTKMeshWidget) stays on the right side of the `QSplitter` (no VTK duplication, no extra GPU
+resources).
+
+```
+setupTab3Registration() helper lambdas:
+  makeScrolled(panel)  →  QScrollArea* wrapping panel, same scroll policy as before
+  makeForm(parent)     →  std::pair<QWidget*, QFormLayout*>
+                          (C++17 structured binding: auto [panel, form] = makeForm())
+
+innerTabs structure:
+  "Setup"          → method, iterations, sample count, Z-window, run btn, status label
+  "Segmentation"   → seeds, undo, clear, Dijkstra params, recompute, eraser, file I/O
+  "Plane"          → above/below spinboxes, pick count, show-planes checkbox
+  "Re-Registration"→ reregister btn, keep-seg checkbox
+
+Splitter initial sizes: {280, 800}
+```
+
+All signal/slot connections (unchanged from before) remain at the bottom of
+`setupTab3Registration()` — the refactor only reorganised the widget tree.
 
 ### 2026-05-30 – Seed undo, gingiva eraser, segmentation save/load, viewport fixes
 
