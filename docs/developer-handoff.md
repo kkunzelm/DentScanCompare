@@ -203,12 +203,12 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 
 ## GUI layout (7 tabs)
 
-**Left sidebar** (fixed 200 px, visible on all tabs):
+**Left sidebar** (resizable via `QSplitter`; minimum 150 px, default 220 px; visible on all tabs):
 
 | Widget | Description |
 |--------|-------------|
 | "Loaded Scans" QGroupBox | `QListWidget m_scanList` — one row per loaded scan.  Clicking a row highlights that scanner in the fingerprint scatter plot.  In "Fixed reference scan:" mode, the click also selects that scan as the GPA registration reference; the row gets a **★** marker and bold font. |
-| "Reference Surface" QGroupBox | Two `QRadioButton`s: **"GPA mean (all scans)"** (default) and **"Fixed reference scan:"**.  A `QLabel m_refFixedLabel` below the second radio shows the current reference name.  Switching to "Fixed reference scan:" adopts the currently highlighted scan; clicking a scan in the list while this radio is active changes the reference immediately.  `int m_fixedRefScanIdx = -1` is the single source of truth (−1 = GPA mode). |
+| "Reference Surface" QGroupBox | Two `QRadioButton`s: **"GPA mean (all scans)"** and **"Fixed reference scan:"** (default, `setChecked(true)` at construction).  A `QLabel m_refFixedLabel` below the second radio shows the current reference name.  Clicking a scan in the list while this radio is active changes the reference immediately; the row gets a **★** marker.  `int m_fixedRefScanIdx = -1` is the single source of truth (−1 = GPA mode).  `openSTLFiles()` resets to GPA mode (`m_refGPARadio->setChecked(true)`) because the reference scan identity changes whenever a new file set is loaded. |
 | Status / progress | `QLabel m_statusBar` + `QProgressBar m_progress` |
 
 **Tab contents:**
@@ -217,7 +217,7 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 |-----|---------|
 | Overview | N × VTKMeshWidget (one per loaded scan) in a horizontal-scrolling `QScrollArea`.  Widgets are created by `rebuildScanWidgets()` called from `onLoadFinished()`; each has `setMinimumWidth(240)` so ≤ 5 scans fill the viewport, 6+ trigger the horizontal scrollbar. |
 | Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
-| Registration | Single `VTKMeshWidget m_overlayWidget` on the right (all scans semi-transparent, or tooth-segmentation overlay).  Left side: embedded `QTabWidget innerTabs` (min 210, max 420 px) with four sub-tabs, inside a `QSplitter` (sizes {280, 800}):<br>**Setup** — method combo (synced from sidebar), `m_maxIterSpin`, `m_sampleSpin`, `m_zWindowSpin`, Run Analysis button, `m_registrationStatus` label.<br>**Segmentation** — `m_pickBtn` (📍/🛑), `m_segStatusLabel`, `m_undoSeedBtn` (disabled until first seed), `m_clearPickBtn`, Max geodesic / CEJ crease / Min curvature spinboxes, `m_recomputeBtn`; **Gingiva Eraser** section: `m_eraseBtn` toggle (mutually exclusive with pickBtn), `m_eraseBrushSpin` (0.5–10 mm, default 2 mm), Clear Erase Zones; **Segmentation File** section: `m_saveSegBtn` (disabled until seeds exist), `m_exportSubsetBtn` (Export Crown Subset…), `m_loadSegBtn`.<br>**Plane** — `m_planeAboveSpin`, `m_planeBelowSpin`, `m_pickCountLabel`, `m_showPlanesChk` (starts unchecked).<br>**Re-Registration** — `m_reregisterBtn` (crown-restricted ICP warm-start), `m_keepSegChk` (default checked). |
+| Registration | Single `VTKMeshWidget m_overlayWidget` on the right (all scans semi-transparent, or tooth-segmentation overlay).  Left side: embedded `QTabWidget innerTabs` (min 210, max 420 px) with four sub-tabs, inside a `QSplitter` (sizes {280, 800}):<br>**Setup** — method combo (synced from sidebar), `m_maxIterSpin`, `m_sampleSpin`, `m_zWindowSpin`, Run Analysis button, `m_registrationStatus` label.<br>**Segmentation** — `m_pickBtn` (📍/🛑), `m_segStatusLabel`, `m_undoSeedBtn` (disabled until first seed), `m_clearPickBtn`, Max geodesic (default 10 mm) / CEJ crease (default 35°) / Min curvature (default −2 /mm) spinboxes, `m_recomputeBtn`; **Eraser Tool** section: `m_eraseBtn` toggle (label "Eraser Tool" / "Stop Erasing", mutually exclusive with pickBtn), `m_eraseBrushSpin` (0.5–10 mm, default 2 mm), Clear Erase Zones; **Segmentation File** section: `m_saveSegBtn` (disabled until seeds exist), `m_exportSubsetBtn` (Export Crown Subset…), `m_loadSegBtn`.<br>**Plane** — `m_planeAboveSpin`, `m_planeBelowSpin`, `m_pickCountLabel`, `m_showPlanesChk` (starts unchecked).<br>**Re-Registration** — `m_reregisterBtn` (crown-restricted ICP warm-start), `m_keepSegChk` (default checked). |
 | Distance Maps | N × VTKMeshWidget with diverging colour map (blue–white–red), same scroll behaviour as Overview.  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
@@ -247,6 +247,28 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Scalable sidebar, fixed-ref default, new segmentation defaults, Eraser Tool rename
+
+**Scalable sidebar.**  `sidebar->setFixedWidth(200)` replaced by `sidebar->setMinimumWidth(150)`.
+The sidebar widget and the main `QTabWidget` are now children of a `QSplitter(Qt::Horizontal)`
+(initial sizes `{220, 1000}`, stretch factors 0 and 1) rather than being placed directly in the
+`QHBoxLayout`.  Users can drag the splitter handle to widen the sidebar for long filenames in
+the Loaded Scans and Reference Surface groups.
+
+**Fixed reference scan as default.**  `m_refFixedRadio->setChecked(true)` is now called at
+construction instead of `m_refGPARadio->setChecked(true)`.  `openSTLFiles()` still resets to
+GPA mode (`m_refGPARadio->setChecked(true)`) because the reference identity is meaningless
+until the user re-selects a scan from the newly loaded file set.
+
+**New segmentation parameter defaults.**  `m_segGeodesicSpin` 12 → **10 mm**;
+`m_segCreaseSpin` 50 → **35°**; `m_segCurvSpin` −4 → **−2 /mm**.  These tighter defaults
+reduce gingival bleed-in on typical dental arch scans without requiring manual adjustment.
+
+**"Erase Gingiva" renamed to "Eraser Tool".**  All three occurrences updated:
+- Section heading `<b>Gingiva Eraser</b>` → `<b>Eraser Tool</b>`
+- Button construction text `"Erase Gingiva"` → `"Eraser Tool"`
+- `toggled` handler restore text `"Erase Gingiva"` → `"Eraser Tool"` (active state stays `"Stop Erasing"`)
 
 ### 2026-05-30 – Export Crown Subset + Registration tab split into four sub-tabs
 

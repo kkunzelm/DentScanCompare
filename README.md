@@ -173,13 +173,17 @@ are measured:
 
 | Radio button | Behaviour |
 |---|---|
-| **GPA mean (all scans)** *(default)* | Iterative Generalized Procrustes Analysis: all scans are aligned to the evolving mean surface.  No individual scanner is privileged.  Recommended for unbiased comparison. |
-| **Fixed reference scan:** | One scan is held fixed; all others are ICP-aligned to it.  The fixed scan's distance metrics will be zero.  Use this when one scan is a trusted ground truth. |
+| **GPA mean (all scans)** | Iterative Generalized Procrustes Analysis: all scans are aligned to the evolving mean surface.  No individual scanner is privileged.  Recommended for unbiased comparison. |
+| **Fixed reference scan:** *(default)* | One scan is held fixed; all others are ICP-aligned to it.  The fixed scan's distance metrics will be zero.  Use this when one scan is a trusted ground truth. |
 
-To select a fixed reference, click **"Fixed reference scan:"** first, then click the
-desired scan in the **Loaded Scans** list — or click the scan first and then select the
-radio button.  The chosen scan gets a **★** marker and bold text in the list; the label
-below the radio button confirms the name.  Loading new STL files resets to GPA mode.
+**"Fixed reference scan:"** is the default selection at startup.  To assign the reference,
+click the desired scan in the **Loaded Scans** list — it gets a **★** marker and bold text
+and the label below the radio button confirms the name.  Selecting the radio button first
+and then clicking a scan works equally well.  Loading new STL files resets to GPA mode.
+
+The **Loaded Scans** and **Reference Surface** panel widths are adjustable: drag the
+divider between the sidebar and the main area to widen or narrow the panel, which is useful
+for long scanner filenames.
 
 #### Registration parameters (Tab 3 – Registration)
 
@@ -189,7 +193,7 @@ occupies the right side throughout.
 | Sub-tab | Contents |
 |---------|----------|
 | **Setup** | Method combo (synced from sidebar), Max ICP iterations, Sample points, Occlusal zone Z-window, Run Analysis button |
-| **Segmentation** | Seed picking, Undo Last Seed, Clear All Seeds, Dijkstra parameters, Recompute Metrics, Gingiva Eraser, Save/Export/Load segmentation |
+| **Segmentation** | Seed picking, Undo Last Seed, Clear All Seeds, Dijkstra parameters, Recompute Metrics, Eraser Tool, Save/Export/Load segmentation |
 | **Plane** | Above / Below plane spinboxes, plane-point count label, Show plane disks checkbox |
 | **Re-Registration** | Crown-restricted ICP warm-start button, Keep-segmentation checkbox |
 
@@ -232,14 +236,14 @@ gingival tissue, scan margins, and boundary artefacts.  Three approaches are ava
 
 | Spinbox | Default | Effect |
 |---------|---------|--------|
-| Max geodesic | 12 mm | Curvature-weighted geodesic budget.  On convex crown surfaces this closely equals physical mm; concave zones (CEJ, gingival sulcus) consume the budget faster.  Decrease if gingiva bleeds in; increase if parts of the crown are cut off. |
-| CEJ crease | 50° | Hard-stop crease angle between adjacent faces.  Decrease (e.g. 35°) to stop earlier at sharp CEJ kinks; increase (e.g. 65°) if the crown has abrupt ridges. |
-| Min curvature | −4 /mm | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 (e.g. −2) to stop earlier; decrease (e.g. −6) if shallow crown concavities are being cut off. |
+| Max geodesic | 10 mm | Curvature-weighted geodesic budget.  On convex crown surfaces this closely equals physical mm; concave zones (CEJ, gingival sulcus) consume the budget faster.  Decrease if gingiva bleeds in; increase if parts of the crown are cut off. |
+| CEJ crease | 35° | Hard-stop crease angle between adjacent faces.  Decrease to stop earlier at sharp CEJ kinks; increase (e.g. 50–65°) if the crown has abrupt ridges that falsely trigger the stop. |
+| Min curvature | −2 /mm | Hard-stop floor on face mean κ_H.  Expansion is blocked when κ_H drops below this threshold (gingival sulcus guard).  Increase toward 0 to stop earlier; decrease (e.g. −4 to −6) if shallow crown concavities are being cut off. |
 
    Segmentation re-runs automatically whenever a spinbox changes (no need to re-place seeds).
 
-6. **Fine-tune with the Gingiva Eraser:** if the segmentation still bleeds onto gingival
-   tissue in isolated spots, click **Erase Gingiva** (turns into **Stop Erasing**), then
+6. **Fine-tune with the Eraser Tool:** if the segmentation still bleeds onto gingival
+   tissue in isolated spots, click **Eraser Tool** (turns into **Stop Erasing**), then
    left-click on each incorrectly included area in the 3-D viewport.  Each click removes
    all ivory-coloured vertices within the **Brush radius** (default 2 mm) of the click
    point.  Multiple clicks accumulate.  Click **Stop Erasing** when finished, or click
@@ -280,8 +284,8 @@ as the primary stopping criterion.  Each face-to-face edge costs physical distan
 curvature κ_min = κ_H − √(κ_H²−κ_G).  This makes the budget consumed faster in
 concave regions (CEJ saddle zone, gingival sulcus), so expansion decelerates naturally
 at the tooth-gum margin — even before the two hard-stop safety nets fire:
-a crease-angle check (≥ 50° kink between face normals signals the CEJ) and
-a curvature floor (mean κ_H > −4 mm⁻¹ rejects the gingival sulcus).
+a crease-angle check (≥ 35° kink between face normals signals the CEJ) and
+a curvature floor (mean κ_H > −2 mm⁻¹ rejects the gingival sulcus).
 
 The segmentation is computed **independently for every loaded scan** using the same
 world-space seed coordinates.  This is necessary because different scanners capture
@@ -529,7 +533,7 @@ segmentation automatically — so you do not need to re-click seed points when r
 application for the same dataset.
 
 **One seed per tooth crown is sufficient.**  The Dijkstra region-growing algorithm expands
-outward from each seed using geodesic distance (≤ 12 mm surface path from the seed) as
+outward from each seed using geodesic distance (≤ 10 mm surface path from the seed) as
 its primary criterion.  This radius covers every tooth type: molars (8–12 mm), premolars
 (7–10 mm), canines (9–12 mm), and incisors (10–13 mm).  Placing multiple seeds on the
 same tooth is harmless but unnecessary.
