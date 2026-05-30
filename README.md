@@ -130,6 +130,11 @@ The scanner name is extracted from the filename using the convention described i
 appear in **Tab 1 – Overview** with Phong shading.  The scanner list on the left shows
 triangle counts.
 
+The number of 3-D viewports in **Tab 1 – Overview** and **Tab 4 – Distance Maps**
+automatically matches the number of loaded files: fewer files → fewer viewports (no empty
+placeholder panels); more than five files → viewports scroll horizontally, each keeping a
+minimum width of 240 px for readability.
+
 **What the loader does automatically:**
 - Reads the binary STL header and per-face stored normals.
 - Corrects inconsistent winding order per face: if the cross-product of the two edge
@@ -159,19 +164,32 @@ to deselect and return to the full view.  Detailed interpretation is in
 
 ---
 
-### Step 3 – Configure registration
+### Step 3 – Choose a reference surface and configure registration
 
-Open **Tab 3 – Registration**.  The controls in the left panel are:
+#### Reference surface (sidebar — visible on all tabs)
+
+The **"Reference Surface"** group box in the left sidebar lets you choose how distances
+are measured:
+
+| Radio button | Behaviour |
+|---|---|
+| **GPA mean (all scans)** *(default)* | Iterative Generalized Procrustes Analysis: all scans are aligned to the evolving mean surface.  No individual scanner is privileged.  Recommended for unbiased comparison. |
+| **Fixed reference scan:** | One scan is held fixed; all others are ICP-aligned to it.  The fixed scan's distance metrics will be zero.  Use this when one scan is a trusted ground truth. |
+
+To select a fixed reference, click **"Fixed reference scan:"** first, then click the
+desired scan in the **Loaded Scans** list — or click the scan first and then select the
+radio button.  The chosen scan gets a **★** marker and bold text in the list; the label
+below the radio button confirms the name.  Loading new STL files resets to GPA mode.
+
+#### Registration parameters (Tab 3 – Registration)
+
+The **"Registration Settings"** panel in Tab 3 exposes ICP tuning options:
 
 | Control | Default | Meaning |
 |---------|---------|---------|
-| Method | GPA – mean reference | Registration target.  "GPA – mean reference" builds a neutral mean surface from all scans.  Alternatively, select a specific scanner as the fixed reference; all other scans are then registered to it and its distance metrics will be zero. |
+| Method | *(synced from sidebar)* | Mirrors the sidebar reference-surface selection; both controls are kept in sync. |
 | Max ICP iterations | 100 | Maximum iterations for the fine ICP stage per GPA cycle. |
 | Sample points | 20000 | Number of points sub-sampled from each mesh for ICP correspondence search.  Reduce for speed; increase for accuracy on very coarse meshes. |
-
-**Recommendation:** Leave the method as "GPA – mean reference" for unbiased comparison.
-Using a specific scanner as the reference is useful only when you want to measure all other
-scanners relative to one trusted ground-truth scan.
 
 ---
 
@@ -505,6 +523,11 @@ wrong for all but the reference scan.
 opened STL files from and the last export directory in your user settings
 (QSettings, application "DentScanCompare").  These are restored automatically the next
 time you open the file dialog or the export dialog.
+
+**Reference mode resets when new files are loaded.**  Whenever you open a new set of STL
+files, the reference-surface selector in the sidebar automatically returns to "GPA mean
+(all scans)".  If you want to use a fixed reference, re-select it from the Loaded Scans
+list after loading.
 
 **GPA is self-referential.**  The mean reference surface is the centroid of all loaded
 scans.  Adding or removing a scan changes the reference, which changes the distance

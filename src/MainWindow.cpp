@@ -32,6 +32,7 @@
 #include <QFuture>
 #include <QtConcurrent/QtConcurrent>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QComboBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -85,7 +86,37 @@ void MainWindow::setupUI()
     m_progress->setRange(0, 100);
     m_progress->hide();
 
+    // Reference Surface selector — visible on all tabs
+    auto* refGroup = new QGroupBox("Reference Surface", sidebar);
+    auto* refLayout = new QVBoxLayout(refGroup);
+    refLayout->setContentsMargins(4, 4, 4, 4);
+    refLayout->setSpacing(4);
+
+    m_refGPARadio = new QRadioButton("GPA mean (all scans)", refGroup);
+    m_refGPARadio->setChecked(true);
+    m_refGPARadio->setToolTip(
+        "Iterative Generalized Procrustes Analysis:\n"
+        "all scans are aligned to the evolving mean surface.\n"
+        "No individual scanner is privileged as the reference.");
+
+    m_refFixedRadio = new QRadioButton("Fixed reference scan:", refGroup);
+    m_refFixedRadio->setToolTip(
+        "One scan is held fixed as the reference;\n"
+        "all others are aligned to it.\n"
+        "Highlight the desired scan in the list above,\n"
+        "then select this option (or select it first,\n"
+        "then click the desired scan).");
+
+    m_refFixedLabel = new QLabel("(select a scan above)", refGroup);
+    m_refFixedLabel->setStyleSheet("font-size: 10px; color: #666; margin-left: 14px;");
+    m_refFixedLabel->setWordWrap(true);
+
+    refLayout->addWidget(m_refGPARadio);
+    refLayout->addWidget(m_refFixedRadio);
+    refLayout->addWidget(m_refFixedLabel);
+
     sideLayout->addWidget(scanGroup);
+    sideLayout->addWidget(refGroup);
     sideLayout->addWidget(m_statusBar);
     sideLayout->addWidget(m_progress);
     sideLayout->addStretch();
@@ -105,10 +136,42 @@ void MainWindow::setupUI()
     topLayout->addWidget(sidebar);
     topLayout->addWidget(m_tabs, 1);
 
-    // Wire scanner list → scatter-plot highlight.
-    // currentRowChanged(-1) when nothing is selected → deselects highlight.
+    // Wire scanner list → scatter-plot highlight AND (in fixed-ref mode) reference selection.
     connect(m_scanList, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_scatterPlot) m_scatterPlot->setHighlightSeries(row);
+        if (m_refFixedRadio && m_refFixedRadio->isChecked()
+                && row >= 0 && row < static_cast<int>(m_scans.size())) {
+            m_fixedRefScanIdx = row;
+            m_refFixedLabel->setText(QString::fromStdString(m_scans[row]->scannerName));
+            if (m_methodCombo && row + 1 < m_methodCombo->count())
+                m_methodCombo->setCurrentIndex(row + 1);
+            refreshScanListMarkers();
+        }
+    });
+
+    // GPA-mean radio: reset fixed reference
+    connect(m_refGPARadio, &QRadioButton::toggled, this, [this](bool checked) {
+        if (!checked) return;
+        m_fixedRefScanIdx = -1;
+        m_refFixedLabel->setText("(select a scan above)");
+        if (m_methodCombo) m_methodCombo->setCurrentIndex(0);
+        refreshScanListMarkers();
+    });
+
+    // Fixed-reference radio: adopt currently highlighted scan (if any)
+    connect(m_refFixedRadio, &QRadioButton::toggled, this, [this](bool checked) {
+        if (!checked) return;
+        const int row = m_scanList->currentRow();
+        if (row >= 0 && row < static_cast<int>(m_scans.size())) {
+            m_fixedRefScanIdx = row;
+            m_refFixedLabel->setText(QString::fromStdString(m_scans[row]->scannerName));
+            if (m_methodCombo && row + 1 < m_methodCombo->count())
+                m_methodCombo->setCurrentIndex(row + 1);
+        } else {
+            m_fixedRefScanIdx = -1;
+            m_refFixedLabel->setText("(select a scan above)");
+        }
+        refreshScanListMarkers();
     });
 }
 
@@ -154,17 +217,10 @@ void MainWindow::setupTab1Overview()
     auto* scroll = new QScrollArea(m_tab1);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* container = new QWidget;
-    auto* hbox = new QHBoxLayout(container);
-    hbox->setSpacing(4);
-
-    // pre-create 5 placeholder widgets
-    for (int i = 0; i < 5; ++i) {
-        auto* w = new VTKMeshWidget(container);
-        w->setTitle(QString("Scan %1").arg(i + 1));
-        hbox->addWidget(w);
-        m_overviewWidgets.push_back(w);
-    }
+    m_overviewHBox = new QHBoxLayout(container);
+    m_overviewHBox->setSpacing(4);
     scroll->setWidget(container);
     layout->addWidget(scroll, 1);
 
@@ -523,16 +579,10 @@ void MainWindow::setupTab4DistanceMaps()
     auto* scroll = new QScrollArea(m_tab4);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* container = new QWidget;
-    auto* hbox = new QHBoxLayout(container);
-    hbox->setSpacing(4);
-
-    for (int i = 0; i < 5; ++i) {
-        auto* w = new VTKMeshWidget(container);
-        w->setTitle(QString("Scan %1 – distance").arg(i + 1));
-        hbox->addWidget(w);
-        m_distWidgets.push_back(w);
-    }
+    m_distHBox = new QHBoxLayout(container);
+    m_distHBox->setSpacing(4);
     scroll->setWidget(container);
     vlay->addWidget(scroll, 1);
 
@@ -682,6 +732,10 @@ void MainWindow::openSTLFiles()
     m_gpaReference.reset();
     m_reports.clear();
     m_scanList->clear();
+    m_fixedRefScanIdx = -1;
+    if (m_refGPARadio)   m_refGPARadio->setChecked(true);
+    if (m_refFixedLabel) m_refFixedLabel->setText("(select a scan above)");
+    if (m_methodCombo)   m_methodCombo->setCurrentIndex(0);
 
     setStatus(QString("Loading %1 file(s)…").arg(paths.size()));
     m_progress->setValue(0);
@@ -711,6 +765,7 @@ void MainWindow::onLoadFinished()
     m_progress->hide();
     setStatus(QString("%1 scan(s) loaded. Click 'Run Analysis' to proceed.")
               .arg(m_scans.size()));
+    rebuildScanWidgets();
     updateScannerList();
     updateMethodCombo();
     updateOverviewTab();
@@ -856,16 +911,44 @@ void MainWindow::showExportDialog()
 
 void MainWindow::updateScannerList()
 {
+    QSignalBlocker blocker(m_scanList);
     m_scanList->clear();
-    for (const auto& scan : m_scans) {
-        auto* item = new QListWidgetItem(
-            QString::fromStdString(scan->scannerName));
+    for (std::size_t i = 0; i < m_scans.size(); ++i) {
+        const auto& scan = m_scans[i];
+        const bool isRef = (static_cast<int>(i) == m_fixedRefScanIdx);
+        QString name = QString::fromStdString(scan->scannerName);
+        auto* item = new QListWidgetItem(isRef ? name + QStringLiteral(" ★") : name);
         item->setToolTip(
             QString::fromStdString(scan->filePath) + "\n"
             + QString::number(scan->triangleCount) + " triangles\n"
             + "[" + QString::fromStdString(scan->stlHeader) + "]");
+        if (isRef) {
+            QFont f = item->font();
+            f.setBold(true);
+            item->setFont(f);
+        }
         m_scanList->addItem(item);
     }
+    if (m_fixedRefScanIdx >= 0 && m_fixedRefScanIdx < m_scanList->count())
+        m_scanList->setCurrentRow(m_fixedRefScanIdx);
+}
+
+void MainWindow::refreshScanListMarkers()
+{
+    const int selRow = m_scanList->currentRow();
+    QSignalBlocker blocker(m_scanList);
+    for (int i = 0; i < m_scanList->count(); ++i) {
+        auto* item = m_scanList->item(i);
+        if (!item) continue;
+        const bool isRef = (i == m_fixedRefScanIdx);
+        QString name = (i < static_cast<int>(m_scans.size()))
+            ? QString::fromStdString(m_scans[i]->scannerName) : item->text();
+        item->setText(isRef ? name + QStringLiteral(" ★") : name);
+        QFont f = item->font();
+        f.setBold(isRef);
+        item->setFont(f);
+    }
+    m_scanList->setCurrentRow(selRow);
 }
 
 void MainWindow::updateMethodCombo()
@@ -883,18 +966,44 @@ void MainWindow::updateMethodCombo()
         m_methodCombo->setCurrentIndex(prev);
 }
 
+void MainWindow::rebuildScanWidgets()
+{
+    // Delete all existing overview widgets
+    for (auto* w : m_overviewWidgets) {
+        m_overviewHBox->removeWidget(w);
+        delete w;
+    }
+    m_overviewWidgets.clear();
+
+    // Delete all existing distance-map widgets
+    for (auto* w : m_distWidgets) {
+        m_distHBox->removeWidget(w);
+        delete w;
+    }
+    m_distWidgets.clear();
+
+    // Create exactly one widget per loaded scan.
+    // Minimum width of 240 px: up to 5 scans fit without scrolling in the default
+    // 1400 px window; 6+ scans trigger the horizontal scrollbar automatically.
+    for (std::size_t i = 0; i < m_scans.size(); ++i) {
+        const QString label = QString::fromStdString(m_scans[i]->scannerName);
+
+        auto* ov = new VTKMeshWidget;
+        ov->setMinimumWidth(240);
+        ov->setTitle(label);
+        m_overviewHBox->addWidget(ov);
+        m_overviewWidgets.push_back(ov);
+
+        auto* dm = new VTKMeshWidget;
+        dm->setMinimumWidth(240);
+        dm->setTitle(label + " – distance");
+        m_distHBox->addWidget(dm);
+        m_distWidgets.push_back(dm);
+    }
+}
+
 void MainWindow::updateOverviewTab()
 {
-    // resize widget list if needed
-    while (m_overviewWidgets.size() < m_scans.size()) {
-        auto* w = new VTKMeshWidget;
-        auto* scroll = qobject_cast<QScrollArea*>(
-            m_tab1->layout()->itemAt(1)->widget());
-        if (scroll && scroll->widget() && scroll->widget()->layout())
-            scroll->widget()->layout()->addWidget(w);
-        m_overviewWidgets.push_back(w);
-    }
-
     for (std::size_t i = 0; i < m_scans.size(); ++i)
         m_overviewWidgets[i]->setMesh(m_scans[i]);
 }
@@ -963,16 +1072,6 @@ void MainWindow::updateDistanceMapsTab()
         maxDist = autoMaxDist;
     } else {
         maxDist = m_distScaleSpin ? m_distScaleSpin->value() : autoMaxDist;
-    }
-
-    // resize distance widgets if needed
-    while (m_distWidgets.size() < m_scans.size()) {
-        auto* w = new VTKMeshWidget;
-        auto* scroll = qobject_cast<QScrollArea*>(
-            m_tab4->layout()->itemAt(1)->widget());
-        if (scroll && scroll->widget() && scroll->widget()->layout())
-            scroll->widget()->layout()->addWidget(w);
-        m_distWidgets.push_back(w);
     }
 
     // Build per-scan tooth masks when seeds are placed, so the distance maps

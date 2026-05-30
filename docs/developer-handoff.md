@@ -184,12 +184,22 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 
 ## GUI layout (7 tabs)
 
+**Left sidebar** (fixed 200 px, visible on all tabs):
+
+| Widget | Description |
+|--------|-------------|
+| "Loaded Scans" QGroupBox | `QListWidget m_scanList` — one row per loaded scan.  Clicking a row highlights that scanner in the fingerprint scatter plot.  In "Fixed reference scan:" mode, the click also selects that scan as the GPA registration reference; the row gets a **★** marker and bold font. |
+| "Reference Surface" QGroupBox | Two `QRadioButton`s: **"GPA mean (all scans)"** (default) and **"Fixed reference scan:"**.  A `QLabel m_refFixedLabel` below the second radio shows the current reference name.  Switching to "Fixed reference scan:" adopts the currently highlighted scan; clicking a scan in the list while this radio is active changes the reference immediately.  `int m_fixedRefScanIdx = -1` is the single source of truth (−1 = GPA mode). |
+| Status / progress | `QLabel m_statusBar` + `QProgressBar m_progress` |
+
+**Tab contents:**
+
 | Tab | Content |
 |-----|---------|
-| Overview | 5 × VTKMeshWidget with Phong shading |
+| Overview | N × VTKMeshWidget (one per loaded scan) in a horizontal-scrolling `QScrollArea`.  Widgets are created by `rebuildScanWidgets()` called from `onLoadFinished()`; each has `setMinimumWidth(240)` so ≤ 5 scans fill the viewport, 6+ trigger the horizontal scrollbar. |
 | Fingerprint | QPainter log-log scatter (triangle area vs. \|κ\|), ATI table.  Legend rows and Loaded-Scans list items are clickable: selects a highlight series; unselected series are dimmed to alpha=18. |
-| Registration | Overlay VTKMeshWidget (all 5 scans semi-transparent), RMS status.  Left panel (QScrollArea) contains three sections: (1) **Registration Settings** — method combo, ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label, Clear Seeds, Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
-| Distance Maps | 5 × VTKMeshWidget with diverging colour map (blue–white–red).  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
+| Registration | Overlay VTKMeshWidget (all scans semi-transparent), RMS status.  Left panel (QScrollArea) contains three sections: (1) **Registration Settings** — method combo (synced from sidebar), ICP iterations, sample points, occlusal-zone spinbox, Run Analysis button; (2) **Tooth Crown Segmentation** — pick button (📍/🛑, starts unchecked), seed status label, Clear Seeds, Max geodesic / CEJ crease / Min curvature spinboxes, Recompute Metrics, Recompute Registration, Keep-segmentation checkbox; (3) **Fitted Occlusal Plane** — Above/Below spinboxes, plane-point count label, Show plane disks checkbox (starts unchecked). |
+| Distance Maps | N × VTKMeshWidget with diverging colour map (blue–white–red), same scroll behaviour as Overview.  Control bar at top: `± [spinbox] mm` colour-scale with `⟳ Auto` button.  When a tooth-crown mask is active, crown vertices use the LUT and non-crown vertices are forced to RGBA (55,55,55,255). |
 | Metrics | MetricsTableWidget: rows = scanners, cols = metrics, green/red best/worst highlight |
 | Export | Directory chooser → fingerprint PNG, distance map PNGs, metrics CSV |
 | About | Rich-text QLabel with author name (Prof. Dr. Karl-Heinz Kunzelmann), clickable link to www.kunzelmann.de, build-stack list (Qt / VTK / CGAL / Eigen), and pipeline summary. |
@@ -219,6 +229,39 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-05-30 – Dynamic scan-window count + sidebar reference-surface selector
+
+**Dynamic scan-window count.**  `setupTab1Overview()` and `setupTab4DistanceMaps()`
+previously pre-created exactly 5 `VTKMeshWidget` instances.  Both functions now only
+create the empty `QHBoxLayout` (stored as `m_overviewHBox` / `m_distHBox` in
+`MainWindow`).  A new helper `rebuildScanWidgets()` is called from `onLoadFinished()`:
+it deletes all existing widgets from both layouts, clears `m_overviewWidgets` /
+`m_distWidgets`, then creates exactly N new widgets (one per loaded scan) with
+`setMinimumWidth(240)`.  With the existing `Qt::ScrollBarAsNeeded` horizontal policy on
+the scroll area, ≤ 5 scans fill the 1 200 px viewport without a scrollbar; 6+ scans
+overflow and the scrollbar appears automatically.  Widget titles come from
+`scan->scannerName` rather than "Scan N".  Reloading a different number of scans
+correctly rebuilds both tabs; the stale growth-only `while` loops in
+`updateOverviewTab()` and `updateDistanceMapsTab()` have been removed.
+
+**Sidebar reference-surface selector.**  A new **"Reference Surface"** `QGroupBox` was
+added to the left sidebar (visible on all tabs), positioned between "Loaded Scans" and
+the status bar.  It contains:
+- `QRadioButton* m_refGPARadio` – "GPA mean (all scans)" — default, checked at startup
+  and whenever new STL files are loaded.
+- `QRadioButton* m_refFixedRadio` – "Fixed reference scan:"
+- `QLabel* m_refFixedLabel` — shows the name of the currently selected reference, or
+  "(select a scan above)" when none is chosen.
+
+When `m_refFixedRadio` is active, clicking any row in `m_scanList` sets that scan as the
+fixed reference **and** updates the fingerprint scatter-plot highlight (dual use).  The
+selected scan gets a **★** suffix and bold font in the list (via `refreshScanListMarkers()`,
+which updates items in-place using `QSignalBlocker` to prevent recursive signals).  The
+existing `m_methodCombo` in the Registration tab is kept in sync: the sidebar drives the
+combo, not the other way around.  `int m_fixedRefScanIdx = -1` is the single source of
+truth (−1 = GPA mode).  `openSTLFiles()` resets all reference-selection state to GPA
+mode when new files are chosen.
 
 ### 2026-05-28 – About tab, window title, manuscript PDF
 

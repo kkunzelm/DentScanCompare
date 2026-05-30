@@ -12,6 +12,7 @@
 #include <QDoubleSpinBox>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QRadioButton>
 #include <QSpinBox>
 #include <QFutureWatcher>
 #include <Eigen/Core>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <vector>
 
+class QHBoxLayout;
 class VTKMeshWidget;
 class ScatterPlotWidget;
 class MetricsTableWidget;
@@ -51,7 +53,9 @@ private:
 
     // ---- update helpers ----
     void updateScannerList();
-    void updateMethodCombo();   // repopulate method combo from loaded scans
+    void updateMethodCombo();       // repopulate method combo from loaded scans
+    void refreshScanListMarkers();  // update bold/star markers in-place without clearing
+    void rebuildScanWidgets();      // delete + recreate overview/distmap widgets for current scan count
 
     // ---- occlusal-plane picking ----
     void onPointPicked(double x, double y, double z);
@@ -79,8 +83,15 @@ private:
     QLabel*       m_statusBar = nullptr;
     QProgressBar* m_progress  = nullptr;
 
+    // ---- Sidebar: reference surface selection ----
+    QRadioButton* m_refGPARadio     = nullptr;  // "GPA mean (all scans)"
+    QRadioButton* m_refFixedRadio   = nullptr;  // "Fixed reference scan:"
+    QLabel*       m_refFixedLabel   = nullptr;  // shows selected reference name
+    int           m_fixedRefScanIdx = -1;        // -1 = GPA mean; >=0 = index in m_scans
+
     // ---- Tab 1: Overview ----
-    QWidget*                    m_tab1       = nullptr;
+    QWidget*                    m_tab1          = nullptr;
+    QHBoxLayout*                m_overviewHBox  = nullptr;
     std::vector<VTKMeshWidget*> m_overviewWidgets;
 
     // ---- Tab 2: Fingerprint ----
@@ -120,7 +131,8 @@ private:
     std::vector<bool>                 m_toothMask;
 
     // ---- Tab 4: Distance Maps ----
-    QWidget*                    m_tab4           = nullptr;
+    QWidget*                    m_tab4      = nullptr;
+    QHBoxLayout*                m_distHBox  = nullptr;
     std::vector<VTKMeshWidget*> m_distWidgets;
     QDoubleSpinBox*             m_distScaleSpin  = nullptr;
     bool                        m_distRangeAuto  = true;
