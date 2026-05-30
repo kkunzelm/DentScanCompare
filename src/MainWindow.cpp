@@ -44,6 +44,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <Eigen/Eigenvalues>
+#include <map>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -62,11 +63,74 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 // -----------------------------------------------------------------------
+// Tooth preset loading
+// -----------------------------------------------------------------------
+
+static const QJsonArray kDefaultPresets()
+{
+    QJsonArray a;
+    auto row = [&](const char* name, double geo, double crease, double curv) {
+        QJsonObject o;
+        o["name"]                = name;
+        o["max_geodesic_mm"]     = geo;
+        o["max_crease_deg"]      = crease;
+        o["min_mean_curvature"]  = curv;
+        a.append(o);
+    };
+    row("Molar",                     13.0, 40.0, -3.0);
+    row("Premolar",                  11.0, 37.0, -2.5);
+    row("Canine",                    10.0, 35.0, -2.0);
+    row("Maxillary lateral incisor",  9.0, 32.0, -2.0);
+    row("Maxillary medial incisor",   9.0, 30.0, -1.5);
+    row("Mandibular incisor",         8.0, 30.0, -1.5);
+    return a;
+}
+
+void MainWindow::loadToothPresets()
+{
+    const QString path =
+        QApplication::applicationDirPath() + "/tooth_presets.json";
+
+    QJsonArray arr;
+    QFile f(path);
+    if (f.open(QIODevice::ReadOnly)) {
+        QJsonParseError err;
+        const auto doc = QJsonDocument::fromJson(f.readAll(), &err);
+        if (!doc.isNull() && doc.isArray())
+            arr = doc.array();
+        else
+            arr = kDefaultPresets();
+    } else {
+        arr = kDefaultPresets();
+        // Write defaults so the user can inspect/edit them
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(arr).toJson());
+    }
+
+    m_toothPresets.clear();
+    for (const QJsonValue& v : arr) {
+        const QJsonObject o = v.toObject();
+        ToothPreset p;
+        p.name                    = o["name"].toString("Unknown");
+        p.params.maxGeodesicMm    = o["max_geodesic_mm"].toDouble(10.0);
+        p.params.maxCreaseAngleDeg= o["max_crease_deg"].toDouble(35.0);
+        p.params.minMeanCurvature = o["min_mean_curvature"].toDouble(-2.0);
+        m_toothPresets.push_back(std::move(p));
+    }
+    if (m_toothPresets.empty()) {
+        // Absolute fallback — should never happen
+        m_toothPresets.push_back({"Molar", {}});
+    }
+}
+
+// -----------------------------------------------------------------------
 // UI setup
 // -----------------------------------------------------------------------
 
 void MainWindow::setupUI()
 {
+    loadToothPresets();
+
     auto* central  = new QWidget(this);
     auto* topLayout = new QHBoxLayout(central);
     setCentralWidget(central);
@@ -372,6 +436,16 @@ void MainWindow::setupTab3Registration()
         "Do NOT click on gingiva.");
     segForm->addRow(m_pickBtn);
 
+    m_toothTypeCombo = new QComboBox(segPanel);
+    for (const auto& p : m_toothPresets)
+        m_toothTypeCombo->addItem(p.name);
+    m_toothTypeCombo->setToolTip(
+        "Select the tooth type for the next seed point.\n"
+        "Each type uses its own segmentation parameters defined in\n"
+        "tooth_presets.json (next to the application executable).\n"
+        "Different seeds can have different types.");
+    segForm->addRow("Tooth type:", m_toothTypeCombo);
+
     m_segStatusLabel = new QLabel("No seeds placed.", segPanel);
     m_segStatusLabel->setWordWrap(true);
     m_segStatusLabel->setStyleSheet("color:#555; font-size:10px;");
@@ -394,13 +468,28 @@ void MainWindow::setupTab3Registration()
     sepParams->setFrameShadow(QFrame::Sunken);
     segForm->addRow(sepParams);
 
-    auto* paramsHeading = new QLabel("<b>Parameters</b>", segPanel);
+    auto* paramsHeading = new QLabel(
+        QString("<b>Parameters for: %1</b>").arg(m_toothPresets[0].name), segPanel);
+    paramsHeading->setWordWrap(true);
     segForm->addRow(paramsHeading);
 
+    // Wire combo → update heading + spinboxes (done here so paramsHeading is in scope)
+    connect(m_toothTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, paramsHeading](int t) {
+        if (t < 0 || t >= static_cast<int>(m_toothPresets.size())) return;
+        const auto& p = m_toothPresets[t];
+        paramsHeading->setText(QString("<b>Parameters for: %1</b>").arg(p.name));
+        { QSignalBlocker b(m_segGeodesicSpin); m_segGeodesicSpin->setValue(p.params.maxGeodesicMm); }
+        { QSignalBlocker b(m_segCreaseSpin);   m_segCreaseSpin->setValue(p.params.maxCreaseAngleDeg); }
+        { QSignalBlocker b(m_segCurvSpin);     m_segCurvSpin->setValue(p.params.minMeanCurvature); }
+        if (!m_pickedPts.empty()) runSegmentation();
+    });
+
+    const auto& firstPreset = m_toothPresets[0].params;
     m_segGeodesicSpin = new QDoubleSpinBox(segPanel);
     m_segGeodesicSpin->setRange(3.0, 25.0);
     m_segGeodesicSpin->setSingleStep(0.5);
-    m_segGeodesicSpin->setValue(10.0);
+    m_segGeodesicSpin->setValue(firstPreset.maxGeodesicMm);
     m_segGeodesicSpin->setSuffix(" mm");
     m_segGeodesicSpin->setToolTip(
         "Maximum surface-path (geodesic) distance from the seed to any\n"
@@ -413,7 +502,7 @@ void MainWindow::setupTab3Registration()
     m_segCreaseSpin = new QDoubleSpinBox(segPanel);
     m_segCreaseSpin->setRange(10.0, 80.0);
     m_segCreaseSpin->setSingleStep(5.0);
-    m_segCreaseSpin->setValue(35.0);
+    m_segCreaseSpin->setValue(firstPreset.maxCreaseAngleDeg);
     m_segCreaseSpin->setSuffix(" °");
     m_segCreaseSpin->setToolTip(
         "Maximum allowed crease angle between adjacent faces.\n"
@@ -427,7 +516,7 @@ void MainWindow::setupTab3Registration()
     m_segCurvSpin = new QDoubleSpinBox(segPanel);
     m_segCurvSpin->setRange(-10.0, 0.0);
     m_segCurvSpin->setSingleStep(0.5);
-    m_segCurvSpin->setValue(-2.0);
+    m_segCurvSpin->setValue(firstPreset.minMeanCurvature);
     m_segCurvSpin->setSuffix(" /mm");
     m_segCurvSpin->setToolTip(
         "Minimum mean curvature κ_H a face must have to be included.\n"
@@ -661,6 +750,7 @@ void MainWindow::setupTab3Registration()
     connect(m_undoSeedBtn, &QPushButton::clicked, this, [this]() {
         if (m_pickedPts.empty()) return;
         m_pickedPts.pop_back();
+        if (!m_seedTypes.empty()) m_seedTypes.pop_back();
         const int n = static_cast<int>(m_pickedPts.size());
         if (n == 0) { clearPickedPoints(); return; }
         if (m_overlayWidget) m_overlayWidget->showPickSpheres(m_pickedPts);
@@ -693,7 +783,17 @@ void MainWindow::setupTab3Registration()
             this, [this](double){ if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization(); });
     connect(m_planeBelowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double){ if (m_showPlanesChk && m_showPlanesChk->isChecked()) updatePlaneVisualization(); });
-    auto reSegment = [this](double){ if (!m_pickedPts.empty()) runSegmentation(); };
+    // Spinbox changes: update the in-session preset for the selected type, then re-segment.
+    auto reSegment = [this](double) {
+        const int t = m_toothTypeCombo ? m_toothTypeCombo->currentIndex() : 0;
+        if (t >= 0 && t < static_cast<int>(m_toothPresets.size())) {
+            auto& p = m_toothPresets[t].params;
+            if (m_segGeodesicSpin) p.maxGeodesicMm     = m_segGeodesicSpin->value();
+            if (m_segCreaseSpin)   p.maxCreaseAngleDeg  = m_segCreaseSpin->value();
+            if (m_segCurvSpin)     p.minMeanCurvature   = m_segCurvSpin->value();
+        }
+        if (!m_pickedPts.empty()) runSegmentation();
+    };
     connect(m_segGeodesicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
     connect(m_segCreaseSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
     connect(m_segCurvSpin,     QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, reSegment);
@@ -1310,6 +1410,7 @@ void MainWindow::onPointPicked(double x, double y, double z)
     }
 
     m_pickedPts.push_back({x, y, z});
+    m_seedTypes.push_back(m_toothTypeCombo ? m_toothTypeCombo->currentIndex() : 0);
     const int n = static_cast<int>(m_pickedPts.size());
 
     if (m_overlayWidget)
@@ -1334,27 +1435,51 @@ void MainWindow::runSegmentation()
     const int n = static_cast<int>(m_pickedPts.size());
     if (n == 0) return;
 
-    ToothSegmentation::Params params;
-    if (m_segGeodesicSpin) params.maxGeodesicMm     = m_segGeodesicSpin->value();
-    if (m_segCreaseSpin)   params.maxCreaseAngleDeg = m_segCreaseSpin->value();
-    if (m_segCurvSpin)     params.minMeanCurvature  = m_segCurvSpin->value();
-
     if (!m_scans.empty()) {
         auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
             [](const auto& a, const auto& b){
                 return a->triangleCount < b->triangleCount; });
 
-        m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts, params);
+        // Run one Dijkstra per seed with its own tooth-type preset, then OR the masks.
+        const std::size_t nVerts = (**refIt).mesh.num_vertices();
+        m_toothMask.assign(nVerts, false);
+        for (int i = 0; i < n; ++i) {
+            const int t = (i < static_cast<int>(m_seedTypes.size()))
+                          ? m_seedTypes[i] : 0;
+            const ToothSegmentation::Params& p =
+                (t >= 0 && t < static_cast<int>(m_toothPresets.size()))
+                ? m_toothPresets[t].params
+                : ToothSegmentation::Params{};
+            const auto seedMask =
+                ToothSegmentation::segmentFromPoints(**refIt, {m_pickedPts[i]}, p);
+            for (std::size_t v = 0; v < nVerts; ++v)
+                m_toothMask[v] = m_toothMask[v] || seedMask[v];
+        }
+
         auto displayMask = applyEraseZones(m_toothMask, **refIt);
 
         const std::size_t nTooth = std::count(displayMask.begin(), displayMask.end(), true);
         const std::size_t nErase = m_eraseZones.size();
 
+        // Build type breakdown string: "2×Molar, 1×Canine"
+        std::map<int, int> typeCounts;
+        for (int i = 0; i < n; ++i) {
+            const int t = (i < static_cast<int>(m_seedTypes.size())) ? m_seedTypes[i] : 0;
+            typeCounts[t]++;
+        }
+        QString typeStr;
+        for (const auto& [t, cnt] : typeCounts) {
+            const QString tName = (t >= 0 && t < static_cast<int>(m_toothPresets.size()))
+                                  ? m_toothPresets[t].name : QString("?");
+            if (!typeStr.isEmpty()) typeStr += ", ";
+            typeStr += QString("%1×%2").arg(cnt).arg(tName);
+        }
+
         if (m_segStatusLabel) {
             QString status =
-                QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
-                        "<span style='color:#555;'>Overlay: ivory=crown, grey=gingiva</span>")
-                    .arg(n).arg(n == 1 ? "" : "s").arg(nTooth);
+                QString("<span style='color:green;'>%1 seed%2 (%3)<br>~%4 tooth vertices</span><br>"
+                        "<span style='color:#555;'>ivory=crown, grey=gingiva</span>")
+                    .arg(n).arg(n == 1 ? "" : "s").arg(typeStr).arg(nTooth);
             if (nErase > 0)
                 status += QString("<br><span style='color:#a06000;'>Erase zones: %1</span>").arg(nErase);
             m_segStatusLabel->setText(status);
@@ -1387,6 +1512,7 @@ void MainWindow::runSegmentation()
 void MainWindow::clearPickedPoints()
 {
     m_pickedPts.clear();
+    m_seedTypes.clear();
     m_toothMask.clear();
     m_eraseZones.clear();
     m_occlusalPlane.active = false;
@@ -1484,15 +1610,22 @@ void MainWindow::saveSegmentation()
     s.setValue("lastSegDir", QFileInfo(path).absolutePath());
 
     QJsonObject root;
-    root["format_version"] = 1;
+    root["format_version"] = 2;
     root["reference"]      = refName;
 
     QJsonArray seeds;
-    for (const auto& p : m_pickedPts) {
+    QJsonArray seedTypeNames;
+    for (std::size_t i = 0; i < m_pickedPts.size(); ++i) {
+        const auto& p = m_pickedPts[i];
         QJsonArray pt; pt.append(p[0]); pt.append(p[1]); pt.append(p[2]);
         seeds.append(pt);
+        const int t = (i < m_seedTypes.size()) ? m_seedTypes[i] : 0;
+        const QString tName = (t >= 0 && t < static_cast<int>(m_toothPresets.size()))
+                              ? m_toothPresets[t].name : QString("Molar");
+        seedTypeNames.append(tName);
     }
-    root["seeds"] = seeds;
+    root["seeds"]       = seeds;
+    root["seed_types"]  = seedTypeNames;
 
     QJsonArray zones;
     for (const auto& [centre, radius] : m_eraseZones) {
@@ -1504,11 +1637,17 @@ void MainWindow::saveSegmentation()
     }
     root["erase_zones"] = zones;
 
-    QJsonObject params;
-    params["max_geodesic_mm"]    = m_segGeodesicSpin ? m_segGeodesicSpin->value() : 12.0;
-    params["max_crease_deg"]     = m_segCreaseSpin   ? m_segCreaseSpin->value()   : 50.0;
-    params["min_mean_curvature"] = m_segCurvSpin     ? m_segCurvSpin->value()     : -4.0;
-    root["params"] = params;
+    // Save all in-session preset values so per-scan fine-tuning is preserved.
+    QJsonArray presets;
+    for (const auto& tp : m_toothPresets) {
+        QJsonObject o;
+        o["name"]               = tp.name;
+        o["max_geodesic_mm"]    = tp.params.maxGeodesicMm;
+        o["max_crease_deg"]     = tp.params.maxCreaseAngleDeg;
+        o["min_mean_curvature"] = tp.params.minMeanCurvature;
+        presets.append(o);
+    }
+    root["presets"] = presets;
 
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -1546,30 +1685,51 @@ void MainWindow::loadSegmentation()
     }
     const QJsonObject root = doc.object();
 
-    // Restore parameters first (with signals blocked so we don't trigger
-    // premature runSegmentation() calls before the seeds are restored)
-    const QJsonObject params = root["params"].toObject();
-    if (!params.isEmpty()) {
-        if (m_segGeodesicSpin && params.contains("max_geodesic_mm")) {
-            QSignalBlocker b(m_segGeodesicSpin);
-            m_segGeodesicSpin->setValue(params["max_geodesic_mm"].toDouble());
+    // Restore in-session preset values if present (format_version >= 2).
+    for (const QJsonValue& v : root["presets"].toArray()) {
+        const QJsonObject o = v.toObject();
+        const QString name = o["name"].toString();
+        for (auto& tp : m_toothPresets) {
+            if (tp.name == name) {
+                tp.params.maxGeodesicMm     = o["max_geodesic_mm"].toDouble(tp.params.maxGeodesicMm);
+                tp.params.maxCreaseAngleDeg = o["max_crease_deg"].toDouble(tp.params.maxCreaseAngleDeg);
+                tp.params.minMeanCurvature  = o["min_mean_curvature"].toDouble(tp.params.minMeanCurvature);
+                break;
+            }
         }
-        if (m_segCreaseSpin && params.contains("max_crease_deg")) {
-            QSignalBlocker b(m_segCreaseSpin);
-            m_segCreaseSpin->setValue(params["max_crease_deg"].toDouble());
-        }
-        if (m_segCurvSpin && params.contains("min_mean_curvature")) {
-            QSignalBlocker b(m_segCurvSpin);
-            m_segCurvSpin->setValue(params["min_mean_curvature"].toDouble());
+    }
+    // Refresh spinboxes to show the (possibly updated) current preset.
+    if (m_toothTypeCombo) {
+        const int t = m_toothTypeCombo->currentIndex();
+        if (t >= 0 && t < static_cast<int>(m_toothPresets.size())) {
+            const auto& p = m_toothPresets[t].params;
+            if (m_segGeodesicSpin) { QSignalBlocker b(m_segGeodesicSpin); m_segGeodesicSpin->setValue(p.maxGeodesicMm); }
+            if (m_segCreaseSpin)   { QSignalBlocker b(m_segCreaseSpin);   m_segCreaseSpin->setValue(p.maxCreaseAngleDeg); }
+            if (m_segCurvSpin)     { QSignalBlocker b(m_segCurvSpin);     m_segCurvSpin->setValue(p.minMeanCurvature); }
         }
     }
 
-    // Restore seeds
+    // Build a name→index lookup for restoring seed types.
+    auto findPresetIndex = [this](const QString& name) -> int {
+        for (int i = 0; i < static_cast<int>(m_toothPresets.size()); ++i)
+            if (m_toothPresets[i].name == name) return i;
+        return 0; // default to first preset if name not found
+    };
+
+    // Restore seeds and their types.
     m_pickedPts.clear();
+    m_seedTypes.clear();
+    const QJsonArray seedTypeNames = root["seed_types"].toArray();
+    int seedIdx = 0;
     for (const QJsonValue& v : root["seeds"].toArray()) {
         const QJsonArray pt = v.toArray();
-        if (pt.size() == 3)
+        if (pt.size() == 3) {
             m_pickedPts.push_back({pt[0].toDouble(), pt[1].toDouble(), pt[2].toDouble()});
+            const QString typeName = (seedIdx < seedTypeNames.size())
+                                     ? seedTypeNames[seedIdx].toString() : QString();
+            m_seedTypes.push_back(typeName.isEmpty() ? 0 : findPresetIndex(typeName));
+            ++seedIdx;
+        }
     }
 
     // Restore erase zones

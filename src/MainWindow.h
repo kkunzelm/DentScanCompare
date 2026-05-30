@@ -3,6 +3,7 @@
 #include "core/Mesh.h"
 #include "core/MetricReport.h"
 #include "core/DistanceField.h"
+#include "core/ToothSegmentation.h"
 #include <QMainWindow>
 #include <QTabWidget>
 #include <QListWidget>
@@ -32,6 +33,11 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
+    struct ToothPreset {
+        QString                   name;
+        ToothSegmentation::Params params;
+    };
+
 private slots:
     void openSTLFiles();
     void runAnalysis();
@@ -56,6 +62,7 @@ private:
     void updateMethodCombo();       // repopulate method combo from loaded scans
     void refreshScanListMarkers();  // update bold/star markers in-place without clearing
     void rebuildScanWidgets();      // delete + recreate overview/distmap widgets for current scan count
+    void loadToothPresets();        // read tooth_presets.json; write defaults if missing
 
     // ---- occlusal-plane picking ----
     void onPointPicked(double x, double y, double z);
@@ -123,6 +130,7 @@ private:
     QDoubleSpinBox* m_zWindowSpin        = nullptr;
 
     // tooth-segmentation / occlusal-plane picking controls
+    QComboBox*      m_toothTypeCombo     = nullptr;  // preset selector for next seed
     QPushButton*    m_pickBtn            = nullptr;
     QLabel*         m_segStatusLabel     = nullptr;  // shows seed count + vertex count
     QPushButton*    m_undoSeedBtn        = nullptr;  // remove most-recent seed
@@ -145,6 +153,8 @@ private:
 
     // picking / segmentation state
     std::vector<std::array<double,3>> m_pickedPts;
+    std::vector<int>                  m_seedTypes;   // index into m_toothPresets per seed
+    std::vector<ToothPreset>          m_toothPresets;
     DistanceField::OcclusalPlane      m_occlusalPlane;
 
     // tooth-segmentation mask (per vertex, for the reference scan).
