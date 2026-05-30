@@ -38,6 +38,10 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFileInfo>
 #include <Eigen/Eigenvalues>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -351,9 +355,88 @@ void MainWindow::setupTab3Registration()
     m_segStatusLabel->setStyleSheet("color:#555; font-size:10px;");
     ctrlLayout->addRow(m_segStatusLabel);
 
-    m_clearPickBtn = new QPushButton("Clear Seeds", ctrlPanel);
-    m_clearPickBtn->setToolTip("Remove all seed points and reset the segmentation.");
+    m_undoSeedBtn = new QPushButton("↩ Undo Last Seed", ctrlPanel);
+    m_undoSeedBtn->setEnabled(false);
+    m_undoSeedBtn->setToolTip(
+        "Remove the most recently placed seed point and re-run segmentation.\n"
+        "Can be pressed repeatedly to undo multiple seeds in reverse order.");
+    ctrlLayout->addRow(m_undoSeedBtn);
+
+    m_clearPickBtn = new QPushButton("Clear All Seeds", ctrlPanel);
+    m_clearPickBtn->setToolTip("Remove all seed points, erase zones, and reset the segmentation.");
     ctrlLayout->addRow(m_clearPickBtn);
+
+    // ── Gingiva Eraser ────────────────────────────────────────────────────
+    auto* eraseInfo = new QLabel(
+        "If the segmentation bleeds onto the\n"
+        "gingiva, enable Erase mode and\n"
+        "click on the incorrectly included\n"
+        "area to paint it out.",
+        ctrlPanel);
+    eraseInfo->setStyleSheet("color:#555; font-size:10px;");
+    eraseInfo->setWordWrap(true);
+    ctrlLayout->addRow(eraseInfo);
+
+    m_eraseBtn = new QPushButton("🧹 Erase Gingiva", ctrlPanel);
+    m_eraseBtn->setCheckable(true);
+    m_eraseBtn->setChecked(false);
+    m_eraseBtn->setToolTip(
+        "Enable erase mode, then left-click on any incorrectly\n"
+        "segmented gingival area in the overlay viewport.\n"
+        "Each click removes all vertices within the brush radius\n"
+        "from the tooth mask.  Multiple clicks accumulate.\n"
+        "Erase zones persist when segmentation parameters change.");
+    ctrlLayout->addRow(m_eraseBtn);
+
+    m_eraseBrushSpin = new QDoubleSpinBox(ctrlPanel);
+    m_eraseBrushSpin->setRange(0.5, 10.0);
+    m_eraseBrushSpin->setSingleStep(0.5);
+    m_eraseBrushSpin->setValue(2.0);
+    m_eraseBrushSpin->setSuffix(" mm");
+    m_eraseBrushSpin->setToolTip(
+        "Radius of the erase brush in world-space millimetres.\n"
+        "All tooth-mask vertices within this radius of the clicked\n"
+        "point are removed from the segmentation.\n"
+        "Increase for large gingival bleeds; decrease for fine edits.");
+    ctrlLayout->addRow("Brush radius:", m_eraseBrushSpin);
+
+    auto* clearEraseBtn = new QPushButton("Clear Erase Zones", ctrlPanel);
+    clearEraseBtn->setToolTip("Remove all erase zones and restore the full Dijkstra mask.");
+    ctrlLayout->addRow(clearEraseBtn);
+
+    // ── Segmentation file I/O ─────────────────────────────────────────────
+    auto* sepSegFile = new QFrame(ctrlPanel);
+    sepSegFile->setFrameShape(QFrame::HLine);
+    sepSegFile->setFrameShadow(QFrame::Sunken);
+    ctrlLayout->addRow(sepSegFile);
+
+    auto* segFileHeading = new QLabel("<b>Segmentation File</b>", ctrlPanel);
+    ctrlLayout->addRow(segFileHeading);
+
+    auto* segFileInfo = new QLabel(
+        "Save seeds, erase zones, and\n"
+        "parameters to a .dsc_seg file.\n"
+        "The file records the reference\n"
+        "surface name for identification.",
+        ctrlPanel);
+    segFileInfo->setStyleSheet("color:#555; font-size:10px;");
+    segFileInfo->setWordWrap(true);
+    ctrlLayout->addRow(segFileInfo);
+
+    m_saveSegBtn = new QPushButton("💾 Save Segmentation…", ctrlPanel);
+    m_saveSegBtn->setEnabled(false);
+    m_saveSegBtn->setToolTip(
+        "Save the current seeds, erase zones, and parameters to a .dsc_seg file.\n"
+        "The file is named after the reference surface by default.\n"
+        "Load it later with 'Load Segmentation' to restore the setup.");
+    ctrlLayout->addRow(m_saveSegBtn);
+
+    m_loadSegBtn = new QPushButton("📂 Load Segmentation…", ctrlPanel);
+    m_loadSegBtn->setToolTip(
+        "Load a previously saved .dsc_seg file.\n"
+        "Seeds, erase zones, and parameters are restored and\n"
+        "segmentation is re-run immediately on the current scans.");
+    ctrlLayout->addRow(m_loadSegBtn);
 
     // ── Segmentation parameters (tunable live) ───────────────────────────
     m_segGeodesicSpin = new QDoubleSpinBox(ctrlPanel);
@@ -468,13 +551,65 @@ void MainWindow::setupTab3Registration()
         "Uncheck to hide the disks without removing the seed spheres.");
     ctrlLayout->addRow(m_showPlanesChk);
 
-    // ── wire picking signals ──────────────────────────────────────────────
+    // ── wire picking / erasing signals ───────────────────────────────────
     connect(m_pickBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_overlayWidget) m_overlayWidget->setPickMode(on);
         m_pickBtn->setText(on ? "🛑 Stop Picking" : "📍 Pick Tooth Seeds");
+        if (on && m_eraseBtn && m_eraseBtn->isChecked())
+            m_eraseBtn->setChecked(false);
+    });
+    connect(m_eraseBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_overlayWidget) m_overlayWidget->setPickMode(on);  // reuse pick mode for click routing
+        m_eraseBtn->setText(on ? "🛑 Stop Erasing" : "🧹 Erase Gingiva");
+        if (on && m_pickBtn && m_pickBtn->isChecked())
+            m_pickBtn->setChecked(false);
+    });
+    connect(clearEraseBtn, &QPushButton::clicked, this, [this]() {
+        m_eraseZones.clear();
+        if (!m_toothMask.empty() && !m_scans.empty()) {
+            auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
+                [](const auto& a, const auto& b){
+                    return a->triangleCount < b->triangleCount; });
+            const std::size_t nTooth = std::count(m_toothMask.begin(), m_toothMask.end(), true);
+            if (m_segStatusLabel)
+                m_segStatusLabel->setText(
+                    QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
+                            "<span style='color:#555;'>Overlay: ivory=crown, grey=gingiva</span>")
+                        .arg(static_cast<int>(m_pickedPts.size()))
+                        .arg(m_pickedPts.size() == 1 ? "" : "s")
+                        .arg(nTooth));
+            if (m_overlayWidget)
+                m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
+            updateDistanceMapsTab();
+        }
+    });
+    connect(m_undoSeedBtn, &QPushButton::clicked, this, [this]() {
+        if (m_pickedPts.empty()) return;
+        m_pickedPts.pop_back();
+        const int n = static_cast<int>(m_pickedPts.size());
+        if (n == 0) {
+            clearPickedPoints();
+            return;
+        }
+        if (m_overlayWidget) m_overlayWidget->showPickSpheres(m_pickedPts);
+        if (n >= 3) {
+            fitOcclusalPlane();
+            if (m_showPlanesChk && m_showPlanesChk->isChecked())
+                updatePlaneVisualization();
+        } else {
+            m_occlusalPlane.active = false;
+            if (m_overlayWidget && m_showPlanesChk && m_showPlanesChk->isChecked())
+                m_overlayWidget->setPlanesVisible(false);
+        }
+        runSegmentation();
+        m_undoSeedBtn->setEnabled(n > 0);
+        m_recomputeBtn->setEnabled(!m_scans.empty());
+        if (m_reregisterBtn) m_reregisterBtn->setEnabled(!m_scans.empty() && m_gpaReference != nullptr);
     });
     connect(m_clearPickBtn, &QPushButton::clicked,
             this, &MainWindow::clearPickedPoints);
+    connect(m_saveSegBtn, &QPushButton::clicked, this, &MainWindow::saveSegmentation);
+    connect(m_loadSegBtn, &QPushButton::clicked, this, &MainWindow::loadSegmentation);
     connect(m_recomputeBtn,   &QPushButton::clicked,
             this, &MainWindow::recomputeMetrics);
     connect(m_reregisterBtn,  &QPushButton::clicked,
@@ -1091,6 +1226,7 @@ void MainWindow::updateDistanceMapsTab()
         if (haveMask) {
             auto mask = ToothSegmentation::segmentFromPoints(
                 *m_scans[i], m_pickedPts, segParams);
+            mask = applyEraseZones(mask, *m_scans[i]);
             m_distWidgets[i]->showDistanceMap(m_scans[i], -maxDist, maxDist, mask);
         } else {
             m_distWidgets[i]->showDistanceMap(m_scans[i], -maxDist, maxDist);
@@ -1112,6 +1248,11 @@ void MainWindow::setStatus(const QString& msg)
 
 void MainWindow::onPointPicked(double x, double y, double z)
 {
+    if (m_eraseBtn && m_eraseBtn->isChecked()) {
+        onErasePointPicked(x, y, z);
+        return;
+    }
+
     m_pickedPts.push_back({x, y, z});
     const int n = static_cast<int>(m_pickedPts.size());
 
@@ -1125,6 +1266,8 @@ void MainWindow::onPointPicked(double x, double y, double z)
     }
 
     runSegmentation();
+    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(true);
+    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(true);
     m_recomputeBtn->setEnabled(n >= 1 && !m_scans.empty());
     if (m_reregisterBtn) m_reregisterBtn->setEnabled(n >= 1 && !m_scans.empty() && m_gpaReference != nullptr);
 }
@@ -1145,14 +1288,20 @@ void MainWindow::runSegmentation()
                 return a->triangleCount < b->triangleCount; });
 
         m_toothMask = ToothSegmentation::segmentFromPoints(**refIt, m_pickedPts, params);
+        auto displayMask = applyEraseZones(m_toothMask, **refIt);
 
-        const std::size_t nTooth = std::count(m_toothMask.begin(), m_toothMask.end(), true);
+        const std::size_t nTooth = std::count(displayMask.begin(), displayMask.end(), true);
+        const std::size_t nErase = m_eraseZones.size();
 
-        if (m_segStatusLabel)
-            m_segStatusLabel->setText(
+        if (m_segStatusLabel) {
+            QString status =
                 QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
                         "<span style='color:#555;'>Overlay: ivory=crown, grey=gingiva</span>")
-                    .arg(n).arg(n == 1 ? "" : "s").arg(nTooth));
+                    .arg(n).arg(n == 1 ? "" : "s").arg(nTooth);
+            if (nErase > 0)
+                status += QString("<br><span style='color:#a06000;'>Erase zones: %1</span>").arg(nErase);
+            m_segStatusLabel->setText(status);
+        }
 
         if (m_pickCountLabel)
             m_pickCountLabel->setText(
@@ -1161,7 +1310,7 @@ void MainWindow::runSegmentation()
                              .arg(3 - n).arg(3 - n == 1 ? "" : "s"));
 
         if (m_overlayWidget)
-            m_overlayWidget->showToothSegmentation(*refIt, m_toothMask);
+            m_overlayWidget->showToothSegmentation(*refIt, displayMask);
 
         // Disable the Z-window spinbox — the tooth mask takes priority
         if (m_zWindowSpin) m_zWindowSpin->setEnabled(false);
@@ -1182,9 +1331,13 @@ void MainWindow::clearPickedPoints()
 {
     m_pickedPts.clear();
     m_toothMask.clear();
+    m_eraseZones.clear();
     m_occlusalPlane.active = false;
     if (m_segStatusLabel) m_segStatusLabel->setText("No seeds placed.");
     if (m_pickCountLabel) m_pickCountLabel->setText("Plane: not fitted yet.");
+    if (m_eraseBtn    && m_eraseBtn->isChecked())   m_eraseBtn->setChecked(false);
+    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(false);
+    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(false);
     m_recomputeBtn->setEnabled(false);
     if (m_reregisterBtn)  m_reregisterBtn->setEnabled(false);
     if (m_zWindowSpin)    m_zWindowSpin->setEnabled(true);
@@ -1194,6 +1347,209 @@ void MainWindow::clearPickedPoints()
             // Restore overlay after clearing segmentation colours
             m_overlayWidget->setOverlayMeshes(m_scans);
         }
+    }
+}
+
+// ── Gingiva eraser ────────────────────────────────────────────────────────────
+
+void MainWindow::onErasePointPicked(double x, double y, double z)
+{
+    const double radius = m_eraseBrushSpin ? m_eraseBrushSpin->value() : 2.0;
+    m_eraseZones.push_back({{x, y, z}, radius});
+
+    if (!m_scans.empty() && !m_toothMask.empty()) {
+        auto refIt = std::max_element(m_scans.begin(), m_scans.end(),
+            [](const auto& a, const auto& b){
+                return a->triangleCount < b->triangleCount; });
+        auto displayMask = applyEraseZones(m_toothMask, **refIt);
+        const std::size_t nTooth = std::count(displayMask.begin(), displayMask.end(), true);
+        const std::size_t nErase = m_eraseZones.size();
+        if (m_segStatusLabel)
+            m_segStatusLabel->setText(
+                QString("<span style='color:green;'>Active: %1 seed%2, ~%3 tooth vertices</span><br>"
+                        "<span style='color:#a06000;'>Erase zones: %4 (radius %5 mm each click)</span>")
+                    .arg(static_cast<int>(m_pickedPts.size()))
+                    .arg(m_pickedPts.size() == 1 ? "" : "s")
+                    .arg(nTooth)
+                    .arg(nErase)
+                    .arg(radius, 0, 'f', 1));
+        if (m_overlayWidget)
+            m_overlayWidget->showToothSegmentation(*refIt, displayMask);
+        updateDistanceMapsTab();
+    }
+}
+
+std::vector<bool> MainWindow::applyEraseZones(std::vector<bool> mask,
+                                               const ScanData& scan) const
+{
+    if (m_eraseZones.empty()) return mask;
+    const auto& mesh = scan.mesh;
+    for (auto v : mesh.vertices()) {
+        if (!mask[v.idx()]) continue;
+        const Point3& p = mesh.point(v);
+        const double px = CGAL::to_double(p.x());
+        const double py = CGAL::to_double(p.y());
+        const double pz = CGAL::to_double(p.z());
+        for (const auto& [centre, radius] : m_eraseZones) {
+            const double dx = px - centre[0];
+            const double dy = py - centre[1];
+            const double dz = pz - centre[2];
+            if (dx*dx + dy*dy + dz*dz <= radius*radius) {
+                mask[v.idx()] = false;
+                break;
+            }
+        }
+    }
+    return mask;
+}
+
+// ── Segmentation file I/O ─────────────────────────────────────────────────────
+
+void MainWindow::saveSegmentation()
+{
+    if (m_pickedPts.empty()) return;
+
+    QString refName;
+    if (m_fixedRefScanIdx >= 0 && m_fixedRefScanIdx < static_cast<int>(m_scans.size()))
+        refName = QString::fromStdString(m_scans[m_fixedRefScanIdx]->scannerName);
+    else
+        refName = "GPA_mean";
+
+    QSettings s("DentScanCompare", "DentScanCompare");
+    const QString lastDir = s.value("lastSegDir", QDir::homePath()).toString();
+    const QString defaultPath = lastDir + "/" + refName + "_segmentation.dsc_seg";
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save Segmentation", defaultPath,
+        "DentScanCompare Segmentation (*.dsc_seg);;All files (*)");
+    if (path.isEmpty()) return;
+    s.setValue("lastSegDir", QFileInfo(path).absolutePath());
+
+    QJsonObject root;
+    root["format_version"] = 1;
+    root["reference"]      = refName;
+
+    QJsonArray seeds;
+    for (const auto& p : m_pickedPts) {
+        QJsonArray pt; pt.append(p[0]); pt.append(p[1]); pt.append(p[2]);
+        seeds.append(pt);
+    }
+    root["seeds"] = seeds;
+
+    QJsonArray zones;
+    for (const auto& [centre, radius] : m_eraseZones) {
+        QJsonObject z;
+        QJsonArray c; c.append(centre[0]); c.append(centre[1]); c.append(centre[2]);
+        z["center"] = c;
+        z["radius"] = radius;
+        zones.append(z);
+    }
+    root["erase_zones"] = zones;
+
+    QJsonObject params;
+    params["max_geodesic_mm"]    = m_segGeodesicSpin ? m_segGeodesicSpin->value() : 12.0;
+    params["max_crease_deg"]     = m_segCreaseSpin   ? m_segCreaseSpin->value()   : 50.0;
+    params["min_mean_curvature"] = m_segCurvSpin     ? m_segCurvSpin->value()     : -4.0;
+    root["params"] = params;
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, "Save failed",
+            "Could not open file for writing:\n" + path);
+        return;
+    }
+    file.write(QJsonDocument(root).toJson());
+    setStatus("Segmentation saved: " + QFileInfo(path).fileName());
+}
+
+void MainWindow::loadSegmentation()
+{
+    QSettings s("DentScanCompare", "DentScanCompare");
+    const QString lastDir = s.value("lastSegDir", QDir::homePath()).toString();
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Load Segmentation", lastDir,
+        "DentScanCompare Segmentation (*.dsc_seg);;All files (*)");
+    if (path.isEmpty()) return;
+    s.setValue("lastSegDir", QFileInfo(path).absolutePath());
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, "Load failed",
+            "Could not open file:\n" + path);
+        return;
+    }
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    if (doc.isNull()) {
+        QMessageBox::warning(this, "Load failed",
+            "Invalid file format:\n" + err.errorString());
+        return;
+    }
+    const QJsonObject root = doc.object();
+
+    // Restore parameters first (with signals blocked so we don't trigger
+    // premature runSegmentation() calls before the seeds are restored)
+    const QJsonObject params = root["params"].toObject();
+    if (!params.isEmpty()) {
+        if (m_segGeodesicSpin && params.contains("max_geodesic_mm")) {
+            QSignalBlocker b(m_segGeodesicSpin);
+            m_segGeodesicSpin->setValue(params["max_geodesic_mm"].toDouble());
+        }
+        if (m_segCreaseSpin && params.contains("max_crease_deg")) {
+            QSignalBlocker b(m_segCreaseSpin);
+            m_segCreaseSpin->setValue(params["max_crease_deg"].toDouble());
+        }
+        if (m_segCurvSpin && params.contains("min_mean_curvature")) {
+            QSignalBlocker b(m_segCurvSpin);
+            m_segCurvSpin->setValue(params["min_mean_curvature"].toDouble());
+        }
+    }
+
+    // Restore seeds
+    m_pickedPts.clear();
+    for (const QJsonValue& v : root["seeds"].toArray()) {
+        const QJsonArray pt = v.toArray();
+        if (pt.size() == 3)
+            m_pickedPts.push_back({pt[0].toDouble(), pt[1].toDouble(), pt[2].toDouble()});
+    }
+
+    // Restore erase zones
+    m_eraseZones.clear();
+    for (const QJsonValue& v : root["erase_zones"].toArray()) {
+        const QJsonObject z = v.toObject();
+        const QJsonArray  c = z["center"].toArray();
+        if (c.size() == 3)
+            m_eraseZones.push_back(
+                {{c[0].toDouble(), c[1].toDouble(), c[2].toDouble()},
+                  z["radius"].toDouble()});
+    }
+
+    const int n = static_cast<int>(m_pickedPts.size());
+
+    if (m_overlayWidget && n > 0)
+        m_overlayWidget->showPickSpheres(m_pickedPts);
+    if (n >= 3) {
+        fitOcclusalPlane();
+        if (m_showPlanesChk && m_showPlanesChk->isChecked())
+            updatePlaneVisualization();
+    }
+
+    if (m_undoSeedBtn) m_undoSeedBtn->setEnabled(n > 0);
+    if (m_saveSegBtn)  m_saveSegBtn->setEnabled(n > 0);
+    m_recomputeBtn->setEnabled(n > 0 && !m_scans.empty());
+    if (m_reregisterBtn)
+        m_reregisterBtn->setEnabled(n > 0 && !m_scans.empty() && m_gpaReference != nullptr);
+
+    if (n > 0) {
+        runSegmentation();
+        const QString refName  = root["reference"].toString("unknown");
+        const QString fileName = QFileInfo(path).fileName();
+        setStatus(QString("Loaded %1 — ref: %2, %3 seeds, %4 erase zone%5")
+            .arg(fileName).arg(refName).arg(n)
+            .arg(m_eraseZones.size()).arg(m_eraseZones.size() == 1 ? "" : "s"));
+    } else {
+        if (m_segStatusLabel) m_segStatusLabel->setText("No seeds in file.");
     }
 }
 
@@ -1268,8 +1624,10 @@ void MainWindow::recomputeMetrics()
     std::size_t totalToothVerts = 0;
     for (std::size_t i = 0; i < m_scans.size(); ++i) {
         std::vector<bool> mask;
-        if (haveMask)
+        if (haveMask) {
             mask = ToothSegmentation::segmentFromPoints(*m_scans[i], m_pickedPts, segParams);
+            mask = applyEraseZones(mask, *m_scans[i]);
+        }
         DistanceField::fillReport(*m_scans[i], m_reports[i],
                                   0.2, zWindow, plane, mask);
         ArchMetrics::computeBoundaryMetrics(*m_scans[i], m_reports[i]);
