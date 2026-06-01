@@ -1,0 +1,133 @@
+HANDOFF PROMPT FOR NEXT SESSION
+================================
+Project: DentScanCompare (C:\claude-code\DentScanCompare)
+Branch:  feature/windows-compat
+Goal:    Make the Qt5/VTK9.3 project compile natively on Windows 11 (MSVC VS2022)
+         while keeping full Linux/WSL2 (GCC) compatibility.
+         Migration path: Qt5 → Qt6 on both platforms, VTK built from source against Qt6.
+
+USER ENVIRONMENT
+----------------
+- Windows 11, Visual Studio 17 2022 (MSVC x64)
+- Qt 6.9.3 installed at C:\Qt\6.9.3\msvc2022_64\
+- WSL2 (Ubuntu), Qt6 installed via apt (/usr/lib/x86_64-linux-gnu/cmake/Qt6/)
+- vcpkg not yet set up (still needed for CGAL, Eigen3, nanoflann on Windows)
+
+VTK BUILD STATUS
+----------------
+WSL2:
+  Source:  ~/VTK-src        (git clone --branch v9.3.1 --depth 1)
+  Build:   ~/VTK-build-linux
+  Install: ~/VTK-install-linux
+  Status:  BUILD WAS RUNNING when session ended — assume complete unless user reports error.
+  Fix applied: -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO  (qmlplugindump removed in Qt6)
+  Verify with: ls ~/VTK-install-linux/lib/cmake/vtk/
+
+Windows:
+  Source:  C:\VTK-src       (still needs: git clone --branch v9.3.1 --depth 1 https://github.com/Kitware/VTK.git C:\VTK-src)
+  Build:   C:\VTK-build-win (not yet started)
+  Install: C:\VTK-install-win
+  cmake command (run from x64 Native Tools Command Prompt for VS 2022):
+
+    cmake C:/VTK-src ^
+      -G "Visual Studio 17 2022" -A x64 ^
+      -DCMAKE_BUILD_TYPE=Release ^
+      -DCMAKE_INSTALL_PREFIX="C:/VTK-install-win" ^
+      -DVTK_GROUP_ENABLE_Qt=YES ^
+      -DVTK_MODULE_ENABLE_VTK_GUISupportQt=YES ^
+      -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO ^
+      -DVTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES ^
+      -DVTK_MODULE_ENABLE_VTK_RenderingAnnotation=YES ^
+      -DVTK_MODULE_ENABLE_VTK_RenderingContext2D=YES ^
+      -DVTK_MODULE_ENABLE_VTK_RenderingContextOpenGL2=YES ^
+      -DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES ^
+      -DVTK_MODULE_ENABLE_VTK_ChartsCore=YES ^
+      -DVTK_MODULE_ENABLE_VTK_ViewsContext2D=YES ^
+      -DVTK_MODULE_ENABLE_VTK_IOExport=YES ^
+      -DVTK_MODULE_ENABLE_VTK_IOExportGL2PS=YES ^
+      -DVTK_MODULE_ENABLE_VTK_IOImage=YES ^
+      -DVTK_MODULE_ENABLE_VTK_IOPLY=YES ^
+      -DVTK_QT_VERSION=6 ^
+      -DQt6_DIR="C:/Qt/6.9.3/msvc2022_64/lib/cmake/Qt6" ^
+      -DVTK_BUILD_TESTING=OFF ^
+      -DVTK_BUILD_EXAMPLES=OFF
+
+    cmake --build . --config Release --parallel
+    cmake --install . --config Release
+
+REMAINING DEPENDENCIES (Windows only, via vcpkg)
+-------------------------------------------------
+Set up vcpkg first:
+  cd C:\
+  git clone https://github.com/microsoft/vcpkg.git
+  cd vcpkg
+  .\bootstrap-vcpkg.bat
+  .\vcpkg integrate install
+
+Then install:
+  .\vcpkg install cgal:x64-windows
+  .\vcpkg install eigen3:x64-windows
+  .\vcpkg install nanoflann:x64-windows
+
+(WSL2: CGAL, Eigen3, nanoflann available via apt — check current CMakeLists.txt for exact versions needed: CGAL 6.0+, Eigen3 3.4+, nanoflann 1.7+)
+  sudo apt install libcgal-dev libeigen3-dev libnanoflann-dev
+
+PROJECT SOURCE CHANGES NEEDED (not yet done)
+---------------------------------------------
+The current CMakeLists.txt uses Qt5 — must be migrated to Qt6 before either platform build works.
+Key changes required in CMakeLists.txt:
+  - find_package(Qt5 5.15 ...) → find_package(Qt6 6.x REQUIRED COMPONENTS Widgets Concurrent PrintSupport OpenGL OpenGLWidgets)
+  - target_link_libraries: Qt5::* → Qt6::*
+  - Qt6 adds OpenGLWidgets as a separate component (QOpenGLWidget moved out of Qt6::OpenGL)
+
+Key changes required in src/CMakeLists.txt:
+  - Qt5::Widgets Qt5::Concurrent Qt5::PrintSupport Qt5::OpenGL
+    → Qt6::Widgets Qt6::Concurrent Qt6::PrintSupport Qt6::OpenGL Qt6::OpenGLWidgets
+
+Potentially affected source files (scan for Qt5-specific API):
+  - src/main.cpp           uses QVTKOpenGLNativeWidget.h (check VTK header path for Qt6 build)
+  - src/visualization/VTKMeshWidget.cpp  uses QVTKOpenGLNativeWidget.h
+  MSVC-specific issues to watch for:
+  - M_PI, M_PI_2 etc. not defined by default under MSVC → use std::numbers::pi (C++20) or #define _USE_MATH_DEFINES
+  - POSIX functions: no direct impact found in grep — all file I/O uses std::filesystem and Qt classes
+  - __attribute__ not supported by MSVC — not found in codebase, probably safe
+  - min/max macros: Windows.h defines min/max as macros — add #define NOMINMAX before any Windows header if needed
+
+WORKFLOW FOR NEXT SESSION
+--------------------------
+Step 1: Confirm WSL2 VTK install is complete:
+  ls ~/VTK-install-linux/lib/cmake/vtk/
+
+Step 2: If Windows VTK build is also complete:
+  ls C:\VTK-install-win\lib\cmake\vtk\
+
+Step 3: Migrate CMakeLists.txt Qt5 → Qt6 (both files), commit.
+
+Step 4: Configure WSL2 build of DentScanCompare:
+  cd ~/  (or wherever the project is accessible in WSL2)
+  cmake /path/to/DentScanCompare \
+    -B build-linux \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DVTK_DIR="$HOME/VTK-install-linux/lib/cmake/vtk" \
+    -DQt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6"
+
+Step 5: Fix all compiler errors that appear, commit each logical fix separately.
+
+Step 6: Configure Windows build of DentScanCompare:
+  cmake C:/claude-code/DentScanCompare \
+    -B C:/claude-code/DentScanCompare/build-windows \
+    -G "Visual Studio 17 2022" -A x64 \
+    -DVTK_DIR="C:/VTK-install-win/lib/cmake/vtk" \
+    -DQt6_DIR="C:/Qt/6.9.3/msvc2022_64/lib/cmake/Qt6" \
+    -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+Step 7: Fix MSVC compiler errors iteratively per the code rules below.
+
+CODE RULES (strictly enforced)
+-------------------------------
+- Prefer std::filesystem / Qt6 classes over POSIX macros
+- #ifdef _WIN32 / #else / #endif only when unavoidable
+- No cosmetic changes — only functional fixes
+- One small git commit per logical fix: git commit -am "Fix: <brief description>"
+- No large batch commits
