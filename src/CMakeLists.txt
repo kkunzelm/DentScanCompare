@@ -24,10 +24,11 @@ target_include_directories(DentScanCompare PRIVATE
 )
 
 target_link_libraries(DentScanCompare PRIVATE
-    Qt5::Widgets
-    Qt5::Concurrent
-    Qt5::PrintSupport
-    Qt5::OpenGL
+    Qt6::Widgets
+    Qt6::Concurrent
+    Qt6::PrintSupport
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${VTK_LIBRARIES}
     CGAL::CGAL
     Eigen3::Eigen

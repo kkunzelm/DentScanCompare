@@ -10,10 +10,10 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt5 5.15 REQUIRED COMPONENTS Widgets Concurrent PrintSupport OpenGL)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Concurrent PrintSupport OpenGL OpenGLWidgets)
 
-# VTK 9.3 on Debian 13 is linked against Qt5; MPI may be listed as transitive
-# dependency even when not used — create a dummy target if MPI is not found.
+# VTK 9.3 linked against Qt6; MPI may be listed as transitive dependency
+# even when not used — create a dummy target if MPI is not found.
 find_package(MPI QUIET)
 if(NOT TARGET MPI::MPI_C)
     add_library(MPI::MPI_C INTERFACE IMPORTED GLOBAL)
