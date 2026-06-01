@@ -39,6 +39,6 @@ find_package(VTK 9.3 REQUIRED COMPONENTS
 )
 
 find_package(CGAL 6.0 REQUIRED)
-find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(Eigen3 REQUIRED NO_MODULE)
 
 add_subdirectory(src)
