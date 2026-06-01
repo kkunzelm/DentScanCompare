@@ -1936,7 +1936,7 @@ bool MainWindow::writeBBoxSubsetSTL(const ScanData& scan,
     QByteArray header(80, '\0');
     const QByteArray nameBytes = QByteArray::fromStdString(
         "DentScanCompare crown subset – " + scan.scannerName);
-    header.replace(0, std::min(79, nameBytes.size()), nameBytes.left(79));
+    header.replace(0, std::min(qsizetype{79}, nameBytes.size()), nameBytes.left(79));
     file.write(header);
 
     // Face count (4 bytes, little-endian)
