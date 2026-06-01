@@ -1,0 +1,477 @@
+DentScanCompare – Windows Development Environment Setup
+==========================================================
+Erstellt: 2026-06-01
+Getestet auf: Windows 11, Visual Studio 2025 Community (v18, MSVC 19.51)
+
+Dieses Dokument beschreibt Schritt fuer Schritt, wie man auf einem neuen
+Windows-Rechner (Notebook) die komplette Entwicklungsumgebung fuer
+DentScanCompare aufbaut. Es dokumentiert genau das, was beim Erstaufbau
+auf dem Desktop-PC notwendig war – inklusive der Probleme, die aufgetreten
+sind, damit man nicht dieselben Fehler zweimal macht.
+
+UEBERBLICK DER ABHAENGIGKEITEN
+-------------------------------
+  Visual Studio 2025 Community  (Compiler MSVC 19.x)
+  Qt 6.9.x MSVC 64-bit          (Installer unter qt.io)
+  VTK 9.3  (selbst kompiliert gegen Qt6, Quelle: github.com/Kitware/VTK)
+  CGAL, Eigen3, nanoflann       (ueber vcpkg)
+  cmake + ninja                 (beide in Visual Studio enthalten)
+
+Zeitbedarf grob:
+  - Installationen und Downloads:  ~1 Stunde
+  - VTK kompilieren (Windows):     ~60-90 Minuten
+  - Projekt konfigurieren/bauen:   ~5 Minuten
+  - DLLs deployen:                 ~5 Minuten
+
+===========================================================
+SCHRITT 1: VISUAL STUDIO 2025 COMMUNITY INSTALLIEREN
+===========================================================
+
+Herunterladen von: https://visualstudio.microsoft.com/downloads/
+Beim Installer genau diese Workload auswaehlen:
+  [x] "Desktop-Entwicklung mit C++"
+
+Wichtig: Die Workload bringt MSVC-Compiler, cmake, ninja, und Windows SDK
+automatisch mit. Man muss cmake und ninja NICHT separat installieren.
+
+Nach der Installation pruefen (in einer x64 Native Tools Command Prompt):
+  cl
+  --> zeigt Compiler-Version (muss 19.x sein)
+
+  cmake --version
+  --> muss >= 3.20 sein
+
+
+===========================================================
+SCHRITT 2: Qt 6.9.x INSTALLIEREN
+===========================================================
+
+1. Qt Online Installer herunterladen: https://www.qt.io/download-qt-installer
+2. Kostenlosen Qt-Account anlegen (einmalig, notwendig fuer den Installer)
+3. Installer starten, folgende Komponente auswaehlen:
+     Qt 6.9.x  -->  MSVC 2022 64-bit
+   (Alles andere – Android, WebAssembly usw. – abwaehlen, das spart Zeit)
+
+Qt landet unter: C:\Qt\6.9.x\msvc2022_64\
+
+WICHTIG: Es darf kein VTK aus dem Qt-Installer genommen werden.
+VTK muss selbst gegen Qt kompiliert werden (Schritt 4).
+
+Hinweis: Die genaue Qt-Versionsnummer (6.9.0, 6.9.3 usw.) spielt keine
+grosse Rolle, solange es 6.x ist. Den Pfad unten entsprechend anpassen.
+
+
+===========================================================
+SCHRITT 3: VCPKG EINRICHTEN UND PAKETE INSTALLIEREN
+===========================================================
+
+vcpkg ist der C++-Paketmanager fuer Windows. Er liefert CGAL, Eigen3 und
+nanoflann fertig kompiliert.
+
+3a. vcpkg klonen und initialisieren
+------------------------------------
+PowerShell (als normaler User, kein Admin noetig):
+
+  cd C:\
+  git clone https://github.com/microsoft/vcpkg.git
+  cd vcpkg
+  .\bootstrap-vcpkg.bat
+  .\vcpkg integrate install
+
+"vcpkg integrate install" traegt vcpkg systemweit in die MSBuild-Umgebung
+ein, damit cmake die Pakete automatisch findet.
+
+3b. Pakete installieren
+------------------------
+  cd C:\vcpkg
+  .\vcpkg install cgal:x64-windows
+  .\vcpkg install eigen3:x64-windows
+  .\vcpkg install nanoflann:x64-windows
+
+Hinweis: CGAL zieht Boost als Abhaengigkeit nach – beim ersten Mal dauert
+das 20-40 Minuten, weil Boost kompiliert wird.
+
+WICHTIG fuer das Projekt: vcpkg liefert Eigen3 mit cmake-Paketversion 5.x
+(obwohl die Bibliothek intern "3.4+" heisst). Deshalb steht in der
+CMakeLists.txt des Projekts kein Versionsnummer bei find_package(Eigen3).
+Das ist absichtlich so und darf nicht "korrigiert" werden.
+
+3c. Installierte Pakete pruefen
+---------------------------------
+  ls C:\vcpkg\installed\x64-windows\share\cgal\CGALConfig.cmake
+  ls C:\vcpkg\installed\x64-windows\share\eigen3\Eigen3Config.cmake
+  ls C:\vcpkg\installed\x64-windows\share\nanoflann\
+
+
+===========================================================
+SCHRITT 4: VTK 9.3 AUS DEM QUELLCODE BAUEN
+===========================================================
+
+Das ist der zeitaufwendigste Schritt, aber unumgaenglich: VTK muss gegen
+exakt dieselbe Qt-Version kompiliert werden, die auch das Projekt nutzt.
+Fertige VTK-Binaerpakete gibt es zwar, aber sie sind meist gegen Qt5
+gelinkt – das fuehrt zu Link-Fehlern.
+
+4a. Quellcode klonen
+---------------------
+  cd C:\
+  git clone --branch v9.3.1 --depth 1 https://github.com/Kitware/VTK.git VTK-src
+
+"--depth 1" spart Zeit und Platz (kein vollstaendiger Git-Verlauf).
+
+4b. KRITISCHER PATCH: diy2/fmt fuer VS 2025 reparieren
+--------------------------------------------------------
+Visual Studio 2025 (MSVC 19.36+) hat den Namespace "stdext" entfernt.
+VTK 9.3 haengt in einer eingebetteten Drittbibliothek (diy2/fmt) noch
+davon ab. Ohne diesen Patch bricht der Build mit Fehler C2653 ab.
+
+Datei oeffnen:
+  C:\VTK-src\ThirdParty\diy2\vtkdiy2\include\vtkdiy2\fmt\format.h
+
+Zeile ~268 suchen (Original):
+  #ifdef _SECURE_SCL
+
+Ersetzen durch:
+  #if defined(_SECURE_SCL) && !(defined(_MSC_VER) && _MSC_VER >= 1936)
+
+Hintergrund: _SECURE_SCL ist in MSVC Debug-Builds gesetzt und loest den
+Pfad aus, der stdext::checked_array_iterator benutzt – dieser Typ wurde in
+VS 2022 17.6+ (MSVC 19.36+) entfernt. Der Patch schaltet den alten Pfad
+fuer alle modernen MSVC-Versionen ab. Release-Builds sind nicht betroffen.
+
+4c. Build-Verzeichnis anlegen und konfigurieren
+------------------------------------------------
+Fuer den naechsten Schritt muss die VS-Compiler-Umgebung aktiv sein.
+Entweder in der "x64 Native Tools Command Prompt for VS 2025" arbeiten,
+oder in PowerShell so starten:
+
+  $vcvars = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+  cmd /c "`"$vcvars`" && cmake --version"  # Test
+
+cmake-Pfad (in VS eingebaut):
+  C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
+
+Verzeichnisse anlegen:
+  mkdir C:\VTK-build-win
+  cd C:\VTK-build-win
+
+VTK konfigurieren (alles in einer Zeile oder mit ^ zeilenumbrechen):
+
+  cmake C:/VTK-src `
+    -G "Visual Studio 18 2026" `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_INSTALL_PREFIX="C:/VTK-install-win" `
+    -DQt6_DIR="C:/Qt/6.9.3/msvc2022_64/lib/cmake/Qt6" `
+    -DVTK_GROUP_ENABLE_Qt=YES `
+    -DVTK_MODULE_ENABLE_VTK_GUISupportQt=YES `
+    -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO `
+    -DVTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES `
+    -DVTK_MODULE_ENABLE_VTK_RenderingAnnotation=YES `
+    -DVTK_MODULE_ENABLE_VTK_RenderingContext2D=YES `
+    -DVTK_MODULE_ENABLE_VTK_RenderingContextOpenGL2=YES `
+    -DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES `
+    -DVTK_MODULE_ENABLE_VTK_ChartsCore=YES `
+    -DVTK_MODULE_ENABLE_VTK_ViewsContext2D=YES `
+    -DVTK_MODULE_ENABLE_VTK_IOExport=YES `
+    -DVTK_MODULE_ENABLE_VTK_IOExportGL2PS=YES `
+    -DVTK_MODULE_ENABLE_VTK_IOImage=YES `
+    -DVTK_MODULE_ENABLE_VTK_IOPLY=YES `
+    -DVTK_QT_VERSION=6 `
+    -DVTK_BUILD_TESTING=OFF `
+    -DVTK_BUILD_EXAMPLES=OFF
+
+Wichtig bei abweichender Qt-Version: Den Pfad bei -DQt6_DIR entsprechend
+anpassen (6.9.3 durch die tatsaechliche Version ersetzen).
+
+Zum Generator: VS 2025 heisst im cmake-Generator "Visual Studio 18 2026"
+(die interne cmake-Bezeichnung; VS 2022 waere "Visual Studio 17 2022").
+
+4d. VTK kompilieren und installieren
+--------------------------------------
+  cmake --build C:\VTK-build-win --config Release --parallel 8
+  cmake --install C:\VTK-build-win --config Release --prefix C:\VTK-install-win
+
+Das Kompilieren dauert 60-90 Minuten.
+
+WICHTIG beim Installieren: Den --prefix Flag mitgeben, sonst versucht cmake
+nach C:\Program Files\ zu installieren und schlaegt wegen fehlender Rechte
+fehl.
+
+4e. Erfolg pruefen
+-------------------
+  ls C:\VTK-install-win\lib\cmake\vtk-9.3\vtk-config.cmake
+  ls C:\VTK-install-win\bin\vtkGUISupportQt-9.3.dll
+
+Wenn beide Dateien existieren, ist VTK korrekt installiert.
+
+
+===========================================================
+SCHRITT 5: DENTSCANCOMPARE KONFIGURIEREN UND BAUEN
+===========================================================
+
+5a. Code holen (falls noch nicht vorhanden)
+--------------------------------------------
+Entweder per git clone vom Notebook (via SSH) oder per USB:
+  git clone kkunzelm@<notebook-ip>:/pfad/zum/repo C:\claude-code\DentScanCompare
+
+Oder aus WSL:
+  git clone /mnt/<laufwerk>/pfad/zum/repo /mnt/c/claude-code/DentScanCompare
+
+5b. Build-Verzeichnis anlegen und cmake ausfuehren
+---------------------------------------------------
+In PowerShell (VS-Umgebung aktiv, siehe oben):
+
+  mkdir C:\claude-code\DentScanCompare\build-windows
+  cd C:\claude-code\DentScanCompare\build-windows
+
+  $vcvars = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+  $cmake = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+
+  cmd /c "`"$vcvars`" >nul && `"$cmake`" -G Ninja -DCMAKE_BUILD_TYPE=Release ``
+    -DVTK_DIR=C:/VTK-install-win/lib/cmake/vtk-9.3 ``
+    -DQt6_DIR=C:/Qt/6.9.3/msvc2022_64/lib/cmake/Qt6 ``
+    -DCMAKE_PREFIX_PATH=C:/Qt/6.9.3/msvc2022_64 ``
+    -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ``
+    -DVCPKG_TARGET_TRIPLET=x64-windows ``
+    C:/claude-code/DentScanCompare"
+
+Warnungen ueber "Vulkan not found" und "Boost CMP0167" sind harmlos und
+koennen ignoriert werden.
+
+5c. Kompilieren
+----------------
+  $ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+  cmd /c "`"$vcvars`" >nul && `"$ninja`" -C C:\claude-code\DentScanCompare\build-windows -j8"
+
+Ergebnis: C:\claude-code\DentScanCompare\build-windows\src\DentScanCompare.exe
+
+Das Kompilieren dauert ca. 2-3 Minuten.
+
+
+===========================================================
+SCHRITT 6: LAUFZEIT-DLLs DEPLOYEN (EINMALIG NACH DEM ERSTEN BUILD)
+===========================================================
+
+Die .exe findet ihre DLLs nur, wenn diese im selben Verzeichnis liegen.
+Drei Gruppen muessen kopiert werden:
+
+6a. Qt-DLLs (inkl. Platform-Plugins) – mit windeployqt
+---------------------------------------------------------
+  $exe = "C:\claude-code\DentScanCompare\build-windows\src\DentScanCompare.exe"
+  C:\Qt\6.9.3\msvc2022_64\bin\windeployqt.exe --release --no-translations $exe
+
+windeployqt kopiert Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll usw. sowie den
+unverzichtbaren platforms\qwindows.dll Plugin. Ohne den Plugin startet die
+Anwendung stillschweigend nicht (kein Fehlerdialog, kein Exitcode).
+
+WICHTIG: windeployqt erkennt nicht alle direkten Qt-Abhaengigkeiten des
+Projekts. Manuell nachkopieren:
+  copy C:\Qt\6.9.3\msvc2022_64\bin\Qt6Concurrent.dll  <exe-verzeichnis>
+  copy C:\Qt\6.9.3\msvc2022_64\bin\Qt6PrintSupport.dll <exe-verzeichnis>
+
+6b. VTK-DLLs – ALLE, ohne Filter
+-----------------------------------
+  $dest = "C:\claude-code\DentScanCompare\build-windows\src"
+  copy C:\VTK-install-win\bin\*.dll $dest
+
+WICHTIG: Keinen Filter anwenden! Ein frueherer Fehler war, Debug-DLLs
+durch das Muster "d-9.3.dll" herausfiltern zu wollen. Das trifft aber auch
+Release-DLLs wie vtkRenderingContext2D-9.3.dll oder vtkViewsContext2D-9.3.dll,
+deren Namen zufaellig auf "D" enden. Im Install-Verzeichnis sind sowieso
+nur Release-DLLs, also einfach alles kopieren.
+
+6c. vcpkg-Runtime-DLLs
+------------------------
+  copy C:\vcpkg\installed\x64-windows\bin\*.dll $dest
+
+Enthaelt u.a. gmp-10.dll (fuer CGAL) und andere C-Bibliotheken.
+
+6d. Testen
+-----------
+DentScanCompare.exe direkt aus dem Verzeichnis starten:
+  C:\claude-code\DentScanCompare\build-windows\src\DentScanCompare.exe
+
+Startet ohne Fehlerdialog und zeigt das Hauptfenster.
+
+Wenn ein Fehler "xyz.dll nicht gefunden" erscheint:
+  - Pruefen ob die DLL in einem der drei Quellverzeichnisse existiert
+  - ggf. manuell kopieren
+  - dumpbin /dependents DentScanCompare.exe zeigt alle direkten Abhaengigkeiten
+
+
+===========================================================
+SCHRITT 7: LINUX-BUILD IN WSL2 (PARALLELE ENTWICKLUNG)
+===========================================================
+
+Wer auch den Linux-Build auf dem Windows-Rechner ausfuehren will (z.B. zur
+Kontrolle nach jeder Aenderung), braucht VTK auch in WSL2.
+
+Vorteil dieser Strategie: Quellcode liegt unter C:\claude-code\DentScanCompare
+(also /mnt/c/claude-code/DentScanCompare in WSL2). Beide Builds teilen
+denselben Source-Tree, haben aber separate Build-Verzeichnisse. Dadurch
+kann man eine Aenderung sofort auf beiden Plattformen pruefen.
+
+7a. Qt6 in WSL2 installieren
+------------------------------
+  sudo apt install -y qt6-base-dev qt6-base-private-dev \
+    qt6-opengl-dev libqt6opengl6-dev libgl1-mesa-dev \
+    cmake ninja-build build-essential git
+
+Ausserdem fuer CGAL/Eigen/nanoflann:
+  sudo apt install -y libcgal-dev libeigen3-dev libnanoflann-dev
+
+7b. VTK-Quellcode in WSL2 einrichten
+--------------------------------------
+Kein erneuter Download noetig – aus dem Windows-Klon kopieren:
+
+  git clone /mnt/c/VTK-src ~/VTK-src
+
+WICHTIG: Den Build NICHT in /mnt/c/ ausfuehren – der Zugriff auf das
+Windows-Dateisystem aus WSL2 ist 10-50x langsamer als auf das native
+WSL2-Dateisystem.
+
+7c. VTK in WSL2 bauen
+----------------------
+  mkdir -p ~/VTK-build-linux && cd ~/VTK-build-linux
+
+  cmake ~/VTK-src \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$HOME/VTK-install-linux" \
+    -DQt6_DIR=/usr/lib/x86_64-linux-gnu/cmake/Qt6 \
+    -DVTK_GROUP_ENABLE_Qt=YES \
+    -DVTK_MODULE_ENABLE_VTK_GUISupportQt=YES \
+    -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO \
+    -DVTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingAnnotation=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingContext2D=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingContextOpenGL2=YES \
+    -DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES \
+    -DVTK_MODULE_ENABLE_VTK_ChartsCore=YES \
+    -DVTK_MODULE_ENABLE_VTK_ViewsContext2D=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOExport=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOExportGL2PS=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOImage=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOPLY=YES \
+    -DVTK_BUILD_TESTING=OFF \
+    -DVTK_BUILD_EXAMPLES=OFF
+
+  cmake --build . --parallel $(nproc)
+  cmake --install .
+
+Bauzeit: ~15-25 Minuten mit Ninja.
+
+7d. DentScanCompare Linux-Build konfigurieren
+----------------------------------------------
+  mkdir -p /mnt/c/claude-code/DentScanCompare/build-linux
+  cd /mnt/c/claude-code/DentScanCompare/build-linux
+
+  cmake .. \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DVTK_DIR="$HOME/VTK-install-linux/lib/cmake/vtk" \
+    -DQt6_DIR=/usr/lib/x86_64-linux-gnu/cmake/Qt6
+
+  ninja
+
+
+===========================================================
+SCHRITT 8: CODE ZWISCHEN NOTEBOOK UND DESKTOP SYNCHRONISIEREN
+===========================================================
+
+Die einfachste Methode im lokalen Netzwerk: Git ueber SSH.
+
+8a. SSH auf dem Linux-Notebook aktivieren (einmalig)
+------------------------------------------------------
+  sudo apt install openssh-server
+  sudo systemctl enable --now ssh
+  ip a   # IP-Adresse notieren, z.B. 192.168.178.50
+
+8b. Auf dem Desktop-PC ein Git-Remote anlegen
+----------------------------------------------
+  cd C:\claude-code\DentScanCompare
+  git remote add notebook kkunzelm@192.168.178.50:/pfad/zum/DentScanCompare
+
+8c. Synchronisierung
+---------------------
+  # Neue Commits vom Notebook holen:
+  git pull notebook main
+
+  # Windows-Fixes zum Notebook schicken:
+  git push notebook feature/windows-compat
+
+Sicherheitseinstellung (einmalig auf beiden Rechnern):
+  git config receive.denyCurrentBranch updateInstead
+
+Das erlaubt, in einen bereits ausgecheckten Branch zu pushen, ohne dass
+Git den Push ablehnt.
+
+
+===========================================================
+SCHNELLREFERENZ: WICHTIGE PFADE AUF DIESEM RECHNER
+===========================================================
+
+  Visual Studio:  C:\Program Files\Microsoft Visual Studio\18\Community\
+  cmake:          ...\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
+  ninja:          ...\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe
+  vcvars64.bat:   ...\VC\Auxiliary\Build\vcvars64.bat
+
+  Qt 6.9.3:       C:\Qt\6.9.3\msvc2022_64\
+  Qt6_DIR:        C:\Qt\6.9.3\msvc2022_64\lib\cmake\Qt6
+  windeployqt:    C:\Qt\6.9.3\msvc2022_64\bin\windeployqt.exe
+
+  VTK Quelle:     C:\VTK-src\
+  VTK Build:      C:\VTK-build-win\
+  VTK Install:    C:\VTK-install-win\
+  VTK_DIR:        C:\VTK-install-win\lib\cmake\vtk-9.3
+
+  vcpkg:          C:\vcpkg\
+  vcpkg DLLs:     C:\vcpkg\installed\x64-windows\bin\
+
+  Projekt:        C:\claude-code\DentScanCompare\
+  Build Windows:  C:\claude-code\DentScanCompare\build-windows\
+  Exe:            C:\claude-code\DentScanCompare\build-windows\src\DentScanCompare.exe
+
+
+===========================================================
+BEKANNTE PROBLEME UND LOESUNGEN
+===========================================================
+
+Problem 1: cmake configure schlaegt fehl mit "VTK not found / GUISupportQt missing"
+  Ursache:  VTK wurde ohne Qt6_DIR konfiguriert und hat Qt nicht gefunden.
+  Loesung:  VTK-Builddirectory leeren, neu konfigurieren mit -DQt6_DIR=...
+            (alle Qt-Module bleiben auf DEFAULT wenn Qt nicht gefunden wird)
+
+Problem 2: VTK-Build schlaegt fehl in ParallelDIY mit C2653 "stdext: not a namespace"
+  Ursache:  MSVC 19.36+ hat stdext entfernt; VTK 9.3's diy2/fmt kennt das nicht.
+  Loesung:  Zeile 268 in VTK-src\ThirdParty\diy2\vtkdiy2\include\vtkdiy2\fmt\format.h
+            patchen (Schritt 4b oben).
+
+Problem 3: cmake configure schlaegt fehl mit "Eigen3 version 5.0.1 not compatible with 3.4"
+  Ursache:  vcpkg liefert Eigen3 mit cmake-Paketversion 5.x und SameMajorVersion-
+            Kompatibilitaet; find_package(Eigen3 3.4) schlaegt fehl (5 != 3).
+  Loesung:  In CMakeLists.txt kein Versionsnummer angeben:
+            find_package(Eigen3 REQUIRED NO_MODULE)   <- so ist es im Projekt
+
+Problem 4: Anwendung startet nicht, kein Fehlerdialog
+  Ursache A: platforms\qwindows.dll fehlt (Qt-Platform-Plugin)
+  Loesung A: windeployqt ausfuehren (Schritt 6a)
+  Ursache B: Eine oder mehrere DLLs fehlen
+  Loesung B: Alle DLLs aus VTK-install-win\bin und vcpkg\installed\x64-windows\bin
+             ins .exe-Verzeichnis kopieren, ohne Filter (Schritt 6b+6c)
+
+Problem 5: Einige VTK-DLLs fehlen trotz Kopiervorgang
+  Ursache:  Falscher DLL-Kopierfilter schloss DLLs aus, deren Namen auf "D" enden
+            (z.B. vtkRenderingContext2D, vtkViewsContext2D).
+  Loesung:  Alle DLLs aus dem Install-Verzeichnis kopieren, kein Regex-Filter.
+
+Problem 6: cmake --install schlaegt fehl mit "vtkParallelDIY DLL not found"
+  Ursache:  ParallelDIY-DLL fehlt im Build (war vor dem fmt-Patch nicht gebaut).
+  Loesung:  Erst fmt-Patch (Schritt 4b), dann rebuild, dann install.
+            Alternativ: install mit --prefix und den Fehler ignorieren funktioniert
+            fuer alle Module ausser ParallelDIY – aber das Projekt braucht ParallelDIY
+            als Transitivabhaengigkeit von InteractionStyle.
+
+Problem 7: Qt6Concurrent.dll oder Qt6PrintSupport.dll fehlen zur Laufzeit
+  Ursache:  windeployqt erkennt nicht alle cmake-Abhaengigkeiten automatisch.
+  Loesung:  Manuell kopieren (Schritt 6a, letzter Absatz).
