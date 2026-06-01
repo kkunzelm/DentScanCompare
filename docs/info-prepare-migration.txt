@@ -376,35 +376,77 @@ Bauzeit: ~15-25 Minuten mit Ninja.
 
 
 ===========================================================
-SCHRITT 8: CODE ZWISCHEN NOTEBOOK UND DESKTOP SYNCHRONISIEREN
+SCHRITT 8: CODE ZWISCHEN DEN REPOS SYNCHRONISIEREN
 ===========================================================
 
-Die einfachste Methode im lokalen Netzwerk: Git ueber SSH.
+Auf dem Desktop-PC existieren drei Git-Repos desselben Projekts:
 
-8a. SSH auf dem Linux-Notebook aktivieren (einmalig)
+  Windows-Repo:     C:\claude-code\DentScanCompare         (Hauptarbeitsplatz Windows)
+  WSL-Repo:         ~/claude-code/DentScanCompare           (Hauptarbeitsplatz Linux / WSL)
+  Debian-Boot-Repo: /mnt/wsl/PHYSICALDRIVE1p2/home/kkunzelm/claude-code/DentScanCompare
+                    (Dual-Boot Debian 13 Partition, nur wenn gemountet erreichbar)
+
+Die Remotes sind so eingerichtet:
+
+  Windows-Repo  <──origin──>  WSL-Repo  ──debian-boot──>  Debian-Boot-Repo
+
+8a. Windows → WSL synchronisieren
+-----------------------------------
+Im Windows-Repo (PowerShell oder cmd):
+
+  git push         # schickt an origin = WSL-Repo
+  git pull         # holt vom WSL-Repo
+
+8b. WSL → Debian-Boot synchronisieren (Dual-Boot-Partition)
+-------------------------------------------------------------
+WICHTIG: Diese Befehle muessen im WSL-Terminal ausgefuehrt werden,
+NICHT in /mnt/c/... sondern im nativen WSL-Homeverzeichnis:
+
+  cd ~/claude-code/DentScanCompare
+
+Einmalige Einrichtung (nur beim ersten Mal):
+
+  git remote add debian-boot /mnt/wsl/PHYSICALDRIVE1p2/home/kkunzelm/claude-code/DentScanCompare
+  git -C /mnt/wsl/PHYSICALDRIVE1p2/home/kkunzelm/claude-code/DentScanCompare config receive.denyCurrentBranch updateInstead
+
+Der zweite Befehl (receive.denyCurrentBranch) muss auf einer einzigen Zeile
+eingegeben werden – nicht ueber zwei Zeilen verteilen, sonst interpretiert
+bash "updateInstead" als eigenen Befehl.
+
+Regulaere Synchronisierung (Debian-Partition muss gemountet sein):
+
+  git push debian-boot feature/windows-compat
+
+Hintergrund: Der Pfad /mnt/wsl/PHYSICALDRIVE1p2/... existiert nur innerhalb
+der WSL-Umgebung. Er kann nicht von Windows aus (Git Bash, PowerShell) gesetzt
+oder genutzt werden – der Versuch fuehrt zu einem falschen Pfad wie
+C:/Program Files/Git/mnt/wsl/... oder einem SSH-Fehler.
+
+8c. Sicherheitseinstellung fuer alle Repos (einmalig)
 ------------------------------------------------------
+Damit Git nicht ablehnt, in einen bereits ausgecheckten Branch zu pushen:
+
+  git config receive.denyCurrentBranch updateInstead
+
+Diesen Befehl einmal in jedem der drei Repo-Verzeichnisse ausfuehren.
+
+8d. Notebook per SSH synchronisieren (lokales Netzwerk)
+---------------------------------------------------------
+Falls ein separates Linux-Notebook im Netzwerk vorhanden ist:
+
+  # SSH auf dem Notebook aktivieren (einmalig auf dem Notebook):
   sudo apt install openssh-server
   sudo systemctl enable --now ssh
   ip a   # IP-Adresse notieren, z.B. 192.168.178.50
 
-8b. Auf dem Desktop-PC ein Git-Remote anlegen
-----------------------------------------------
-  cd C:\claude-code\DentScanCompare
+  # Remote auf dem Desktop-PC anlegen:
   git remote add notebook kkunzelm@192.168.178.50:/pfad/zum/DentScanCompare
 
-8c. Synchronisierung
----------------------
   # Neue Commits vom Notebook holen:
   git pull notebook main
 
   # Windows-Fixes zum Notebook schicken:
   git push notebook feature/windows-compat
-
-Sicherheitseinstellung (einmalig auf beiden Rechnern):
-  git config receive.denyCurrentBranch updateInstead
-
-Das erlaubt, in einen bereits ausgecheckten Branch zu pushen, ohne dass
-Git den Push ablehnt.
 
 
 ===========================================================
