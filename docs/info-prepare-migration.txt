@@ -475,3 +475,53 @@ Problem 6: cmake --install schlaegt fehl mit "vtkParallelDIY DLL not found"
 Problem 7: Qt6Concurrent.dll oder Qt6PrintSupport.dll fehlen zur Laufzeit
   Ursache:  windeployqt erkennt nicht alle cmake-Abhaengigkeiten automatisch.
   Loesung:  Manuell kopieren (Schritt 6a, letzter Absatz).
+
+
+===========================================================
+WEITERGABE AN KOLLEGEN – STATISCHES LINKEN VS. DLL-ORDNER
+===========================================================
+
+Frage: Waere statisches Linken einfacher als der Ordner voller DLLs?
+
+Kurze Antwort: Fuer Qt und VTK nein – fuer die MSVC-Laufzeit ja.
+
+Qt + VTK statisch linken (NICHT empfohlen)
+-------------------------------------------
+- Qt liefert keine statischen Bibliotheken im Installer. Man muesste Qt
+  komplett aus dem Quellcode neu bauen (4–8 Stunden, sehr aufwendig).
+- VTK statisch gelinkt wuerde die .exe um ~100–200 MB vergroessern.
+- Beide Bibliotheken stehen unter LGPL. Statisches Linken erfordert, dass
+  man Nutzern eine Moeglichkeit gibt, gegen eine modifizierte Qt/VTK-Version
+  neu zu linken (ueblicherweise durch Bereitstellen der Objektdateien oder
+  des Quellcodes). Das ist extra Aufwand ohne praktischen Nutzen.
+
+Fazit: Der Ordner mit DLLs ist der Standard-Deployment-Weg fuer Qt-
+Anwendungen unter Windows. Er ist nicht das Problem – er ist das Ziel.
+
+MSVC-Laufzeit statisch linken (empfohlen fuer Weitergabe)
+----------------------------------------------------------
+Die zwei Microsoft-Laufzeit-DLLs (vcruntime140.dll, msvcp140.dll) duerfen
+lizenzrechtlich nicht mitgeliefert werden. Auf modernen Windows-Rechnern
+sind sie meist vorhanden, aber nicht garantiert.
+
+Loesung: Eine Zeile in CMakeLists.txt, die den Compiler-Schalter /MT setzt:
+
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+Diese Zeile direkt nach den cmake_minimum_required / project Zeilen einfuegen.
+
+Wirkung: Die MSVC-Laufzeit wird direkt in die .exe eingebaut. Die .exe
+wird ~1–2 MB groesser, aber vcruntime140.dll und msvcp140.dll werden nicht
+mehr benoetigt. Kollegen koennen die Anwendung ohne vorherige Installation
+des "Visual C++ Redistributable" starten.
+
+Vorgehen fuer die Weitergabe an Kollegen
+-----------------------------------------
+1. /MT-Flag in CMakeLists.txt einfuegen (siehe oben), neu bauen.
+2. windeployqt ausfuehren (kopiert Qt-DLLs und Plugins).
+3. Qt6Concurrent.dll und Qt6PrintSupport.dll manuell kopieren.
+4. Alle VTK-DLLs aus C:\VTK-install-win\bin\ kopieren (ohne Filter).
+5. Alle vcpkg-DLLs aus C:\vcpkg\installed\x64-windows\bin\ kopieren.
+6. Den gesamten src\-Ordner als ZIP weitergeben.
+   Kollegen entpacken und starten DentScanCompare.exe direkt – keine
+   Installation, kein Visual Studio, kein Qt erforderlich.
