@@ -15,8 +15,8 @@ STL test files live at: `/home/kkunzelm/claude-code/match3d-plus/data/3d-data/st
 
 | Library | Version | Notes |
 |---------|---------|-------|
-| Qt | **5.15** (not 6!) | VTK 9.3 on this machine was compiled against Qt5; using Qt6 causes `INTERFACE_QT_MAJOR_VERSION` conflict at link time |
-| VTK | 9.3 | Has MPI dependency – see CMake pitfall below |
+| Qt | **6.2+** | Custom VTK build in `~/VTK-install-linux` compiled with Qt6 |
+| VTK | 9.3 | Custom build in `~/VTK-install-linux`; has MPI dependency – see CMake pitfall below |
 | CGAL | 6.0.1 | Property-map API changed in 6.0 – see code pitfall below |
 | Eigen | 3.4.0 | Matrix math for ICP |
 | nanoflann | 1.7 | Header-only KD-tree; lives in `/usr/include/nanoflann.hpp` |
@@ -25,7 +25,11 @@ STL test files live at: `/home/kkunzelm/claude-code/match3d-plus/data/3d-data/st
 
 ```cmake
 project(DentScanCompare VERSION 1.0 LANGUAGES CXX C)   # C language required
-find_package(Qt5 5.15 REQUIRED COMPONENTS Widgets Concurrent PrintSupport OpenGL)
+
+# Custom VTK installation (compiled with Qt6)
+set(VTK_DIR "$ENV{HOME}/VTK-install-linux/lib/cmake/vtk-9.3" CACHE PATH "VTK installation")
+
+find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Concurrent PrintSupport OpenGL OpenGLWidgets)
 find_package(MPI QUIET)                                 # must come BEFORE VTK
 if(NOT TARGET MPI::MPI_C)
     add_library(MPI::MPI_C INTERFACE IMPORTED GLOBAL)
@@ -36,6 +40,8 @@ find_package(VTK 9.3 REQUIRED COMPONENTS ...)
 `LANGUAGES CXX C` enables the MPI C-language detection.  VTK's targets file unconditionally
 references `MPI::MPI_C`; without the C language enabled, CMake cannot create that target and
 the configure step fails.
+
+**Cross-compilation note**: Windows 11 builds use the same Qt6/VTK configuration.
 
 ---
 
