@@ -12,9 +12,10 @@ exported as PNG images and a CSV file.
 ## Table of Contents
 
 1. [Purpose](#purpose)
-2. [Dependencies](#dependencies)
-3. [Building](#building)
-4. [Workflow and Usage](#workflow-and-usage)
+2. [Scope: DentScanCompare vs DentScanComparePro](#scope-dentscancompare-vs-dentscancomparepro)
+3. [Dependencies](#dependencies)
+4. [Building](#building)
+5. [Workflow and Usage](#workflow-and-usage)
    - [Step 1 – Load mesh files](#step-1--load-mesh-files)
    - [Step 2 – Inspect the Tessellation Fingerprint](#step-2--inspect-the-tessellation-fingerprint)
    - [Step 3 – Configure registration](#step-3--configure-registration)
@@ -23,14 +24,14 @@ exported as PNG images and a CSV file.
    - [Step 6 – Read the Distance Maps](#step-6--read-the-distance-maps)
    - [Step 7 – Read the Metrics table](#step-7--read-the-metrics-table)
    - [Step 8 – Export results](#step-8--export-results)
-5. [Metric Reference](#metric-reference)
+6. [Metric Reference](#metric-reference)
    - [Tessellation quality metrics](#tessellation-quality-metrics)
    - [Accuracy metrics](#accuracy-metrics)
    - [Completeness metrics](#completeness-metrics)
-6. [Tessellation Fingerprint – Interpretation Guide](#tessellation-fingerprint--interpretation-guide)
-7. [Distance Map – Interpretation Guide](#distance-map--interpretation-guide)
-8. [File naming convention](#file-naming-convention)
-9. [Important considerations](#important-considerations)
+7. [Tessellation Fingerprint – Interpretation Guide](#tessellation-fingerprint--interpretation-guide)
+8. [Distance Map – Interpretation Guide](#distance-map--interpretation-guide)
+9. [File naming convention](#file-naming-convention)
+10. [Important considerations](#important-considerations)
 
 ---
 
@@ -53,6 +54,34 @@ The software answers three clinical questions:
   curves most.
 - **How complete is each scan?** — coverage percentage, open boundary length, hole count,
   and stitching artefact angles quantify gaps and registration failures.
+
+---
+
+## Scope: DentScanCompare vs DentScanComparePro
+
+This project has a sibling: **DentScanComparePro**.  Both share the same core algorithms
+(GPA registration, ICP, curvature analysis, tooth segmentation, distance fields) but
+serve different use cases:
+
+| Aspect | DentScanCompare | DentScanComparePro |
+|--------|-----------------|-------------------|
+| **Primary Use** | Interactive analysis of ~5 scanner files | Automated batch evaluation of large studies (100+ scans) |
+| **Workflow** | Manual, GUI-driven | JSON-driven batch configuration + CLI mode |
+| **Output** | Visual results + single CSV | ISO 5725/12836-compliant trueness & precision CSVs |
+| **Target Users** | Researchers exploring data interactively | Production pipelines, statistical analysis (R, SPSS) |
+
+**Choose DentScanCompare when:**
+- You have a small number of scans to compare (typically ≤10)
+- You want rich interactive visualization (3D colour maps, scatter plots)
+- You need to manually place tooth segmentation seeds and inspect results
+- You're exploring data or preparing figures for publication
+
+**Choose DentScanComparePro when:**
+- You have a large study (multiple scanners × multiple SKD levels × repetitions)
+- You need automated batch processing with resume capability
+- You require QC workflow (visual verification, errand flagging, re-registration)
+- You want to integrate with external alignment tools (DentScanAlign)
+- You need pairwise precision metrics across scan repetitions
 
 ---
 
