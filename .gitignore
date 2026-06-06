@@ -1,3 +1,107 @@
+# Build directories
 build/
 build-linux/
 build-windows/
+
+# Documentation (keep only interpretation.txt)
+docs/*
+!docs/interpretation.txt
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeScripts/
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Ninja
+.ninja_deps
+.ninja_log
+build.ninja
+
+# Compiled files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.pdb
+*.ilk
+*.exp
+
+# Qt
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qm
+.qmake.stash
+*.pro.user
+*.pro.user.*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.orig
+*.bak
+.project
+.cproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# Clangd / LSP
+.cache/
+compile_commands.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary and log files
+*.log
+*.tmp
+*.temp
+*.pid
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Package managers
+vcpkg_installed/
+
+# Data and output (user-specific)
+data/
+output/
+results/
+*.csv
+*.png
+*.pdf
+
+# User-specific files
+TODO.md
+NOTES.md
+*.local
