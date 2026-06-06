@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-FileCopyrightText: 2026 Prof. Dr. Karl-Heinz Kunzelmann <www.kunzelmann.de>
+
 #include "VTKMeshWidget.h"
 #include "ColorMapLUT.h"
 
@@ -323,8 +326,12 @@ bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
             if (me->button() == Qt::LeftButton) {
                 // Only treat as a pick if the mouse barely moved (click, not drag).
                 if ((me->pos() - m_pressPos).manhattanLength() < 6) {
-                    const int x = me->pos().x();
-                    const int y = m_vtkWidget->height() - me->pos().y() - 1;
+                    // Convert from Qt logical pixels to VTK device pixels.
+                    // On high-DPI displays, me->pos() returns logical coords but
+                    // vtkCellPicker::Pick() expects device (physical) pixels.
+                    const qreal dpr = m_vtkWidget->devicePixelRatioF();
+                    const int x = static_cast<int>(me->pos().x() * dpr);
+                    const int y = static_cast<int>((m_vtkWidget->height() - me->pos().y() - 1) * dpr);
                     vtkNew<vtkCellPicker> picker;
                     picker->SetTolerance(0.0005);
                     if (picker->Pick(x, y, 0, m_renderer)) {

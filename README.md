@@ -32,6 +32,8 @@ exported as PNG images and a CSV file.
 8. [Distance Map – Interpretation Guide](#distance-map--interpretation-guide)
 9. [File naming convention](#file-naming-convention)
 10. [Important considerations](#important-considerations)
+11. [License](#license)
+12. [Author](#author)
 
 ---
 
@@ -709,3 +711,27 @@ first place to inspect.
 five scans at ~500 k triangles each takes 60–120 seconds.  The bottleneck is the GPA
 mean-mesh update (~30 s), which performs an AABB closest-point query for every reference
 vertex against every scan and is currently single-threaded.
+
+---
+
+## License
+
+DentScanCompare is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software Foundation,
+either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program.
+If not, see <https://www.gnu.org/licenses/>.
+
+**SPDX-License-Identifier:** GPL-2.0-or-later
+
+---
+
+## Author
+
+Prof. Dr. Karl-Heinz Kunzelmann
+www.kunzelmann.de

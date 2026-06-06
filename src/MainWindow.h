@@ -1,4 +1,7 @@
 #pragma once
+// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-FileCopyrightText: 2026 Prof. Dr. Karl-Heinz Kunzelmann <www.kunzelmann.de>
+
 
 #include "core/Mesh.h"
 #include "core/MetricReport.h"
