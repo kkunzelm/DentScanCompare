@@ -1,9 +1,9 @@
 # DentScanCompare
 
 A desktop application for the systematic quality comparison of dental intraoral scanner
-outputs.  Multiple STL scans of the same physical object are loaded, automatically
-co-registered via Generalized Procrustes Analysis (GPA), and evaluated across a
-comprehensive set of accuracy, tessellation, and completeness metrics.  All results are
+outputs.  Multiple 3D mesh files (STL, PLY, OBJ) of the same physical object are loaded,
+automatically co-registered via Generalized Procrustes Analysis (GPA), and evaluated
+across a comprehensive set of accuracy, tessellation, and completeness metrics.  All results are
 displayed in interactive 3-D colour maps and a sortable metrics table, and can be
 exported as PNG images and a CSV file.
 
@@ -15,7 +15,7 @@ exported as PNG images and a CSV file.
 2. [Dependencies](#dependencies)
 3. [Building](#building)
 4. [Workflow and Usage](#workflow-and-usage)
-   - [Step 1 – Load STL files](#step-1--load-stl-files)
+   - [Step 1 – Load mesh files](#step-1--load-mesh-files)
    - [Step 2 – Inspect the Tessellation Fingerprint](#step-2--inspect-the-tessellation-fingerprint)
    - [Step 3 – Configure registration](#step-3--configure-registration)
    - [Step 4 – Define the region of interest](#step-4--define-the-region-of-interest)
@@ -29,7 +29,7 @@ exported as PNG images and a CSV file.
    - [Completeness metrics](#completeness-metrics)
 6. [Tessellation Fingerprint – Interpretation Guide](#tessellation-fingerprint--interpretation-guide)
 7. [Distance Map – Interpretation Guide](#distance-map--interpretation-guide)
-8. [STL file naming convention](#stl-file-naming-convention)
+8. [File naming convention](#file-naming-convention)
 9. [Important considerations](#important-considerations)
 
 ---
@@ -37,7 +37,8 @@ exported as PNG images and a CSV file.
 ## Purpose
 
 Dental intraoral scanners are evaluated under identical conditions: each scanner captures
-the same physical test model (e.g., DefektIIa) and produces a binary STL file.  Because
+the same physical test model (e.g., DefektIIa) and produces a 3D mesh file (typically
+STL, but PLY and OBJ are also supported).  Because
 no external reference geometry is available (no CT or CMM ground truth), the application
 constructs a neutral reference surface internally using Generalized Procrustes Analysis —
 the mean of all aligned scans.  This makes the comparison self-contained and scanner-
@@ -118,12 +119,26 @@ three blocks — the configure step will fail.
 
 ## Workflow and Usage
 
-### Step 1 – Load STL files
+### Step 1 – Load mesh files
 
-**File → Open STL files** (or the toolbar button).  Select one or more binary STL files
-in a single dialog.  There is no upper limit on the number of files, but the GPA and
-AABB distance computations scale with triangle count; five scans of ~500 k triangles each
-complete in roughly 60–90 seconds on a modern desktop.
+**File → Add Mesh Files…** (or the toolbar button).  Select one or more 3D mesh files
+in a single dialog.  Supported formats:
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| **STL** | `.stl` | Binary STL (most common scanner export format) |
+| **PLY** | `.ply` | Stanford Polygon format; meshes with faces or point clouds |
+| **OBJ** | `.obj` | Wavefront OBJ format |
+
+There is no upper limit on the number of files, but the GPA and AABB distance computations
+scale with triangle count; five scans of ~500 k triangles each complete in roughly 60–90
+seconds on a modern desktop.
+
+**Point cloud triangulation.**  PLY and OBJ files that contain only vertices (no faces)
+are automatically triangulated using CGAL's Advancing Front Surface Reconstruction
+algorithm.  This is well-suited for dental scan point clouds which are typically
+well-sampled.  The triangulation uses a radius bound (5% of bounding box diagonal) to
+filter out overly large boundary triangles.
 
 **Adding files from different directories.**  Opening the dialog a second time *adds* to
 the existing scan list rather than replacing it.  Duplicate files (same absolute path) are
@@ -132,9 +147,9 @@ the new total count.  To start fresh, use **File → Clear All Scans** (Ctrl+Shi
 asks for confirmation before discarding all loaded scans, seeds, and erase zones.
 
 The scanner name is extracted from the filename using the convention described in
-[STL file naming convention](#stl-file-naming-convention).  Once loaded, all meshes
-appear in **Tab 1 – Overview** with Phong shading.  The scanner list on the left shows
-triangle counts.
+[File naming convention](#file-naming-convention).  Once loaded, all meshes appear in
+**Tab 1 – Overview** with Phong shading.  The scanner list on the left shows triangle
+counts.
 
 The number of 3-D viewports in **Tab 1 – Overview** and **Tab 4 – Distance Maps**
 automatically matches the number of loaded files: fewer files → fewer viewports (no empty
@@ -142,11 +157,21 @@ placeholder panels); more than five files → viewports scroll horizontally, eac
 minimum width of 240 px for readability.
 
 **What the loader does automatically:**
+
+*For STL files:*
 - Reads the binary STL header and per-face stored normals.
 - Corrects inconsistent winding order per face: if the cross-product of the two edge
   vectors is anti-aligned with the stored STL normal, the two non-pivot vertices are
   swapped.  This is necessary because some scanners (Primescan) export faces wound in
   the opposite direction from the others.
+
+*For PLY/OBJ files:*
+- Reads mesh geometry using CGAL I/O functions.
+- If the file contains faces, converts via polygon soup processing.
+- If the file is a point cloud (no faces), performs Advancing Front Surface
+  Reconstruction to generate a triangulated mesh.
+
+*For all formats:*
 - Runs `repair_polygon_soup` → `orient_polygon_soup` → `polygon_soup_to_polygon_mesh`
   to produce a clean CGAL `Surface_mesh`.
 - Computes per-vertex mean and Gaussian curvature via CGAL
@@ -185,7 +210,7 @@ are measured:
 **"Fixed reference scan:"** is the default selection at startup.  To assign the reference,
 click the desired scan in the **Loaded Scans** list — it gets a **★** marker and bold text
 and the label below the radio button confirms the name.  Selecting the radio button first
-and then clicking a scan works equally well.  Loading new STL files resets to GPA mode.
+and then clicking a scan works equally well.  Loading new mesh files resets to GPA mode.
 
 The **Loaded Scans** and **Reference Surface** panel widths are adjustable: drag the
 divider between the sidebar and the main area to widen or narrow the panel, which is useful
@@ -544,20 +569,21 @@ convention holds after GPA alignment with the occlusal surface pointing toward +
 
 ---
 
-## STL file naming convention
+## File naming convention
 
-The scanner name is extracted from the STL **filename** using underscore `_` as a
-delimiter: the second token is taken as the scanner name.
+The scanner name is extracted from the mesh **filename** (STL, PLY, or OBJ) using
+underscore `_` as a delimiter: the second token is taken as the scanner name.
 
 ```
 DefektIIa_Primescan_30_3min23s_r3.stl   →  "Primescan"
-DefektIIa_Trios5_30_4min01s_r1.stl      →  "Trios5"
-DefektIIa_Mediti700_30_2min45s_r2.stl   →  "Mediti700"
+DefektIIa_Trios5_30_4min01s_r1.ply      →  "Trios5"
+DefektIIa_Mediti700_30_2min45s_r2.obj   →  "Mediti700"
 ```
 
 If the filename has fewer than two underscore-delimited tokens, the full stem is used as
 the scanner name.  To ensure correct scanner identification, follow the
-`<model>_<Scanner>_<...>.stl` naming pattern when adding new scans.
+`<model>_<Scanner>_<...>.<ext>` naming pattern when adding new scans (where `<ext>` is
+`stl`, `ply`, or `obj`).
 
 ---
 
@@ -608,10 +634,10 @@ in one step — no need to click Stop Picking first.  The same applies in revers
 (no Dijkstra re-run); the distance maps in Tab 4 and the metrics in Tab 5 are updated only
 when you click **⟳  Recompute Metrics**.
 
-**Incremental STL loading.**  Opening STL files a second time *adds* files to the current
-session rather than replacing them.  Use **File → Clear All Scans** (Ctrl+Shift+W) to
-discard everything and start fresh.  The reference-surface selection resets to GPA mean
-after Clear All Scans.
+**Incremental mesh loading.**  Opening mesh files a second time *adds* files to the current
+session rather than replacing them.  All supported formats (STL, PLY, OBJ) can be mixed
+in a single session.  Use **File → Clear All Scans** (Ctrl+Shift+W) to discard everything
+and start fresh.  The reference-surface selection resets to GPA mean after Clear All Scans.
 
 **Each seed uses its own tooth-type preset.**  When a seed is placed, the currently selected
 tooth type is stored with that seed.  Changing the type selector afterward does not
@@ -625,12 +651,12 @@ scanners have different vertex counts; a mask shared by vertex index would be si
 wrong for all but the reference scan.
 
 **Last-used directories are remembered.**  The application stores the last directory you
-opened STL files from and the last export directory in your user settings
+opened mesh files from and the last export directory in your user settings
 (QSettings, application "DentScanCompare").  These are restored automatically the next
 time you open the file dialog or the export dialog.
 
 **Reference mode resets when new files are loaded or when Clear All Scans is used.**
-Whenever you load additional STL files or clear the scan list, the reference-surface
+Whenever you load additional mesh files or clear the scan list, the reference-surface
 selector in the sidebar automatically returns to "GPA mean (all scans)".  If you want to
 use a fixed reference, re-select it from the Loaded Scans list afterward.
 

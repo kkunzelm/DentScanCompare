@@ -26,8 +26,9 @@ Five commercially available intraoral scanners were evaluated:
 Each scanner was operated by an experienced dental technician according to the
 manufacturer's recommended scanning protocol for a full-arch upper jaw. blabla...
 
-All scans were exported as binary STL files without post-processing or smoothing
-by the scanner software. Scanner-specific coordinate systems and file orientations were not normalised prior to import.
+All scans were exported as 3D mesh files (STL, PLY, or OBJ format) without
+post-processing or smoothing by the scanner software. Scanner-specific coordinate
+systems and file orientations were not normalised prior to import.
 
 ### 2.3 Software analysis pipeline
 
@@ -35,10 +36,15 @@ A custom analysis application (DentScanCompare/Prof. K. H. Kunzelmann, C++20 / Q
 stages:
 
 **Stage 1 – Mesh import and repair.**
-Binary STL files were imported and converted to CGAL Surface Mesh objects.
-Per-face winding order was verified against the explicit face normals stored in
-the binary STL header; triangles with reversed winding were corrected prior to
-polygon-soup construction. Degenerate and duplicate faces were removed using
+3D mesh files were imported and converted to CGAL Surface Mesh objects.  The
+application supports three formats: binary STL (the primary scanner export format),
+PLY (Stanford Polygon format), and OBJ (Wavefront).  For STL files, per-face winding
+order was verified against the explicit face normals stored in the binary STL header;
+triangles with reversed winding were corrected prior to polygon-soup construction.
+PLY and OBJ files containing only point cloud data (no faces) were automatically
+triangulated using CGAL's Advancing Front Surface Reconstruction algorithm, which is
+well-suited for the dense, well-sampled point clouds typical of dental scanners.
+Degenerate and duplicate faces were removed using
 `CGAL::Polygon_mesh_processing::repair_polygon_soup`.
 
 **Stage 2 – Curvature analysis.**

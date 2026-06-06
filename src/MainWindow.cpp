@@ -1,6 +1,6 @@
 #include "MainWindow.h"
 
-#include "core/STLReader.h"
+#include "core/MeshReader.h"
 #include "core/CurvatureAnalysis.h"
 #include "core/TessellationMetrics.h"
 #include "core/ICPRegistration.h"
@@ -252,9 +252,9 @@ void MainWindow::setupUI()
 void MainWindow::setupMenuAndToolbar()
 {
     auto* fileMenu  = menuBar()->addMenu("&File");
-    auto* actOpen   = fileMenu->addAction("&Add STL files…");
+    auto* actOpen   = fileMenu->addAction("&Add Mesh Files…");
     actOpen->setShortcut(QKeySequence::Open);
-    connect(actOpen, &QAction::triggered, this, &MainWindow::openSTLFiles);
+    connect(actOpen, &QAction::triggered, this, &MainWindow::openMeshFiles);
     auto* actClear  = fileMenu->addAction("&Clear All Scans");
     actClear->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
     connect(actClear, &QAction::triggered, this, &MainWindow::clearAllScans);
@@ -273,7 +273,7 @@ void MainWindow::setupMenuAndToolbar()
     // toolbar
     auto* tb = addToolBar("Main");
     tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    auto* tbOpen    = tb->addAction("Add STL", this, &MainWindow::openSTLFiles);
+    auto* tbOpen    = tb->addAction("Add Mesh", this, &MainWindow::openMeshFiles);
     auto* tbAnalyse = tb->addAction("▶  Run Analysis", this, &MainWindow::runAnalysis);
     auto* tbExport  = tb->addAction("Export…", this, &MainWindow::showExportDialog);
     (void)tbOpen; (void)tbAnalyse; (void)tbExport;
@@ -1018,15 +1018,15 @@ void MainWindow::setupTab7About()
 // Slots
 // -----------------------------------------------------------------------
 
-void MainWindow::openSTLFiles()
+void MainWindow::openMeshFiles()
 {
     QSettings s("DentScanCompare", "DentScanCompare");
     const QString lastOpenDir = s.value("lastOpenDir", QDir::homePath()).toString();
 
     QStringList paths = QFileDialog::getOpenFileNames(
-        this, "Add STL files",
+        this, "Add Mesh Files",
         lastOpenDir,
-        "STL files (*.stl *.STL);;All files (*)");
+        QString::fromStdString(MeshReader::getMeshFileFilter()));
     if (paths.isEmpty()) return;
     s.setValue("lastOpenDir", QFileInfo(paths.first()).absolutePath());
 
@@ -1067,7 +1067,7 @@ void MainWindow::openSTLFiles()
     auto future = QtConcurrent::run([this, newPaths, prevCount, nNew]() {
         for (const QString& p : newPaths) {
             std::string err;
-            auto scan = STLReader::read(p.toStdString(), err);
+            auto scan = MeshReader::read(p.toStdString(), err);
             if (scan) {
                 QMetaObject::invokeMethod(this, [this, scan, prevCount, nNew]() {
                     m_scans.push_back(scan);
@@ -1933,9 +1933,11 @@ bool MainWindow::writeBBoxSubsetSTL(const ScanData& scan,
     if (!file.open(QIODevice::WriteOnly)) return false;
 
     // Binary STL header (80 bytes)
+    // Include "UNIT=mm" prefix — some software (e.g., MeshLab, Cura) recognizes this.
+    // Format: "UNIT=mm <scanner_name> crown subset"
     QByteArray header(80, '\0');
-    const QByteArray nameBytes = QByteArray::fromStdString(
-        "DentScanCompare crown subset – " + scan.scannerName);
+    const std::string headerStr = "UNIT=mm " + scan.scannerName + " crown subset";
+    const QByteArray nameBytes = QByteArray::fromStdString(headerStr);
     header.replace(0, std::min(qsizetype{79}, nameBytes.size()), nameBytes.left(79));
     file.write(header);
 

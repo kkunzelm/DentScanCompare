@@ -2,6 +2,7 @@ set(SOURCES
     main.cpp
     MainWindow.cpp
     core/STLReader.cpp
+    core/MeshReader.cpp
     core/CurvatureAnalysis.cpp
     core/TessellationMetrics.cpp
     core/ICPRegistration.cpp

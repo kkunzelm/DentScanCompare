@@ -55,6 +55,7 @@ src/
 ├── core/
 │   ├── Mesh.h                 SurfaceMesh type aliases + ScanData struct
 │   ├── MetricReport.h         Plain metric aggregate struct (no logic)
+│   ├── MeshReader.{h,cpp}     Unified mesh reader (STL/PLY/OBJ) with point cloud triangulation
 │   ├── STLReader.{h,cpp}      Binary STL → CGAL SurfaceMesh
 │   ├── CurvatureAnalysis.{h,cpp}   CGAL interpolated_corrected_curvatures
 │   ├── TessellationMetrics.{h,cpp} ATI, mean edge, aspect ratio, density
@@ -77,10 +78,16 @@ export/
 
 ## Analysis pipeline (in order)
 
-1. **STLReader** – Binary STL → polygon soup → CGAL `SurfaceMesh`.
-   Per-face: use stored STL normal to verify winding order; if cross-product of edges is
-   anti-aligned with STL normal, swap vertices 1 and 2.  This handles scanners (Primescan)
-   that export faces wound in the opposite direction.
+1. **MeshReader** – Unified mesh file import supporting STL, PLY, and OBJ formats.
+   - **STL files**: Delegates to `STLReader`.  Per-face: use stored STL normal to verify
+     winding order; if cross-product of edges is anti-aligned with STL normal, swap
+     vertices 1 and 2.  This handles scanners (Primescan) that export faces wound in the
+     opposite direction.
+   - **PLY/OBJ files with faces**: Direct CGAL I/O read, then polygon soup processing.
+   - **PLY/OBJ point clouds (no faces)**: Automatic surface reconstruction using CGAL's
+     `Advancing_front_surface_reconstruction`.  Uses a radius bound (5% of bounding box
+     diagonal) to filter large boundary triangles.  Falls back to unbounded reconstruction
+     if the bounded version produces no triangles.
    After soup construction: `repair_polygon_soup` → `orient_polygon_soup` → `polygon_soup_to_polygon_mesh`.
 
 2. **CurvatureAnalysis** – `CGAL::Polygon_mesh_processing::interpolated_corrected_curvatures`.
@@ -224,7 +231,7 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 | Widget | Description |
 |--------|-------------|
 | "Loaded Scans" QGroupBox | `QListWidget m_scanList` — one row per loaded scan.  Clicking a row highlights that scanner in the fingerprint scatter plot.  In "Fixed reference scan:" mode, the click also selects that scan as the GPA registration reference; the row gets a **★** marker and bold font. |
-| "Reference Surface" QGroupBox | Two `QRadioButton`s: **"GPA mean (all scans)"** and **"Fixed reference scan:"** (default, `setChecked(true)` at construction).  A `QLabel m_refFixedLabel` below the second radio shows the current reference name.  Clicking a scan in the list while this radio is active changes the reference immediately; the row gets a **★** marker.  `int m_fixedRefScanIdx = -1` is the single source of truth (−1 = GPA mode).  `openSTLFiles()` resets to GPA mode (`m_refGPARadio->setChecked(true)`) because the reference scan identity changes whenever a new file set is loaded. |
+| "Reference Surface" QGroupBox | Two `QRadioButton`s: **"GPA mean (all scans)"** and **"Fixed reference scan:"** (default, `setChecked(true)` at construction).  A `QLabel m_refFixedLabel` below the second radio shows the current reference name.  Clicking a scan in the list while this radio is active changes the reference immediately; the row gets a **★** marker.  `int m_fixedRefScanIdx = -1` is the single source of truth (−1 = GPA mode).  `openMeshFiles()` resets to GPA mode (`m_refGPARadio->setChecked(true)`) because the reference scan identity changes whenever a new file set is loaded. |
 | Status / progress | `QLabel m_statusBar` + `QProgressBar m_progress` |
 
 **Tab contents:**
@@ -263,6 +270,38 @@ coarse alignment.  Residual 180° flip handled by the 4-orientation test.
 ---
 
 ## Changelog (reverse chronological)
+
+### 2026-06-06 – PLY and OBJ file format support with point cloud triangulation
+
+**Multi-format mesh loading.**  The application now supports three 3D mesh formats:
+- **STL** (binary): Existing reader, unchanged.
+- **PLY** (Stanford Polygon): Meshes with faces or point clouds.
+- **OBJ** (Wavefront): Meshes with faces or point clouds.
+
+New files added:
+- `src/core/MeshReader.h` — Unified mesh reader header with `MeshFormat` enum, format
+  auto-detection, and reader dispatch.
+- `src/core/MeshReader.cpp` — Implementation using CGAL I/O for PLY/OBJ, delegates STL
+  to existing `STLReader`.
+
+**Point cloud triangulation.**  PLY and OBJ files without faces (point clouds) are
+automatically triangulated using CGAL's Advancing Front Surface Reconstruction algorithm.
+Key implementation details:
+- `AdvancingFrontPriority` functor controls triangle quality via a radius bound
+  (5% of bounding box diagonal) to filter out large boundary triangles.
+- Falls back to unbounded reconstruction if the bounded version produces no triangles.
+- Resulting triangles are processed through `repair_polygon_soup` → `orient_polygon_soup`
+  → `polygon_soup_to_polygon_mesh` for mesh cleanup.
+
+**UI changes:**
+- Menu: "Add STL files…" → "Add Mesh Files…"
+- Toolbar: "Add STL" → "Add Mesh"
+- File dialog filter: `3D Mesh Files (*.stl *.ply *.obj);;STL Files;;PLY Files;;OBJ Files;;All Files`
+- Function `openSTLFiles()` renamed to `openMeshFiles()` in `MainWindow`.
+
+**Dependencies:** No new external dependencies.  Uses existing CGAL installation.
+CGAL headers added: `<CGAL/Advancing_front_surface_reconstruction.h>`,
+`<CGAL/pca_estimate_normals.h>`, `<CGAL/mst_orient_normals.h>`.
 
 ### 2026-05-30 – Per-seed tooth-type presets, incremental STL loading, eraser fixes
 

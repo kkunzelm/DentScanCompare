@@ -39,7 +39,7 @@ public:
     };
 
 private slots:
-    void openSTLFiles();
+    void openMeshFiles();
     void runAnalysis();
     void showExportDialog();
     void onLoadFinished();
