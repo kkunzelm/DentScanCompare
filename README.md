@@ -735,8 +735,6 @@ If not, see <https://www.gnu.org/licenses/>.
 
 **Prof. Dr. Karl-Heinz Kunzelmann**
 
-Original author of the surface fitting algorithms and this Qt6/C++20 re-implementation.
-
 This project is fully open-source and free to use under the **[GNU General Public License v2 (GPL v2)]** license. You are welcome to download, modify, and self-host it at no cost.
 
 
